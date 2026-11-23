@@ -151,7 +151,12 @@ class CcTestRegistrationTest(unittest.TestCase):
         return {
             "name": test["name"].removeprefix(prefix),
             "command": test["command"][1:],
-            "properties": sorted(test["properties"], key=lambda item: item["name"]),
+            # Newer CMake records the declaration location. The reference and
+            # discovery copy intentionally have different source paths.
+            "properties": sorted(
+                (item for item in test["properties"] if item["name"] != "DEF_SOURCE_LINE"),
+                key=lambda item: item["name"],
+            ),
         }
 
     def _regenerate(self) -> None:
@@ -195,16 +200,19 @@ class CcTestRegistrationTest(unittest.TestCase):
     def test_discovery_copies_preserve_literals_and_original_compile_sources(self) -> None:
         copies = list((self._build / "gtest-discovery").glob("*.cpp"))
         self.assertEqual(len(copies), 2)
+        expected_relative = "".join(f"{macro}(  {suite},     {name} ) {{}}\n" for macro, suite, name in _CASES)
         expected = {
-            re.sub(b"[\r\n\t]", b" ", source.read_bytes().replace(b"\r\n", b"\n"))
-            for source in (self._relative_source, self._absolute_source)
+            expected_relative + "\n",
+            "TEST(SecondSourceSuite,      SeparateCase) {}\n" + _LITERALS + "\n\n",
         }
-        self.assertEqual({copy.read_bytes() for copy in copies}, expected)
+        self.assertEqual({copy.read_text() for copy in copies}, expected)
         compile_sources = (self._build / "compile-sources.txt").read_text().split(";")
         self.assertEqual(compile_sources, ["a/same_test.cpp", str(self._absolute_source)])
 
         ninja = (self._build / "build.ninja").read_text().replace("$ ", " ")
-        rerun = next(line for line in ninja.splitlines() if line.startswith("build build.ninja: RERUN_CMAKE"))
+        rerun = next(
+            line for line in ninja.splitlines() if line.startswith("build build.ninja") and ": RERUN_CMAKE" in line
+        )
         self.assertIn(str(self._relative_source), rerun)
         self.assertIn(str(self._absolute_source), rerun)
         for copy in copies:
@@ -232,6 +240,12 @@ class CcTestRegistrationTest(unittest.TestCase):
         self.assertEqual(self._configure_count(), initial_count + 1)
         self.assertEqual({copy: copy.stat().st_mtime_ns for copy in copies}, changed_timestamps)
         self.assertEqual(list(self._build.rglob("*.o")), [])
+
+    def test_final_declaration_without_newline_is_registered(self) -> None:
+        with self._relative_source.open("a") as source:
+            source.write("TEST(FinalSuite, NoTrailingNewline) {}")
+        self._regenerate()
+        self.assertIn("FinalSuite.NoTrailingNewline", {test["name"] for test in self._inventory()})
 
 
 if __name__ == "__main__":

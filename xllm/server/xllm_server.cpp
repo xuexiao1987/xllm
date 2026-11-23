@@ -22,7 +22,7 @@ limitations under the License.
 #include <unistd.h>
 
 #include <array>
-#include <csignal>
+#include <chrono>
 
 #include "api_service/api_service.h"
 #include "core/disaggregation/pd_service.h"
@@ -38,10 +38,6 @@ limitations under the License.
 namespace xllm {
 
 namespace {
-volatile std::sig_atomic_t g_quit_flag = 0;
-
-void quit_signal_handler(int /*signum*/) { g_quit_flag = 1; }
-
 constexpr const char* kApiServiceRoutes =
     "v1/completions => CompletionsHttp,"
     "v1/sample => SampleHttp,"
@@ -97,21 +93,6 @@ const char* get_api_service_routes_for_current_mode() {
   return nullptr;
 }
 
-void install_quit_signal_handler() {
-  g_quit_flag = 0;
-  struct sigaction sa = {};
-  sa.sa_handler = quit_signal_handler;
-  sigemptyset(&sa.sa_mask);
-  sigaction(SIGINT, &sa, nullptr);
-  sigaction(SIGTERM, &sa, nullptr);
-}
-
-void wait_for_quit_signal() {
-  while (!g_quit_flag) {
-    sleep(1);
-  }
-}
-
 bool configure_generic_server(brpc::Server* server,
                               google::protobuf::Service* service,
                               const std::string& server_name) {
@@ -133,7 +114,8 @@ XllmServer::~XllmServer() {
   }
 }
 
-bool XllmServer::start(std::unique_ptr<APIService> service) {
+bool XllmServer::start(std::unique_ptr<APIService> service,
+                       const ShutdownContext& shutdown_context) {
   server_ = std::make_unique<brpc::Server>();
   if (const char* routes = get_api_service_routes_for_current_mode();
       routes != nullptr) {
@@ -178,8 +160,9 @@ bool XllmServer::start(std::unique_ptr<APIService> service) {
   LOG(INFO) << "     Waiting for application startup.";
   LOG(INFO) << "     Application startup complete.";
 
-  install_quit_signal_handler();
-  wait_for_quit_signal();
+  while (!shutdown_context.requested() && !stopping_.load()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
 
   LOG(INFO) << "     Shutting down";
   LOG(INFO) << "     Waiting for application shutdown.";
@@ -291,26 +274,34 @@ bool XllmServer::create_server(google::protobuf::Service* service,
   return true;
 }
 
-void XllmServer::run() {
+void XllmServer::run(const ShutdownContext& shutdown_context) {
   if (has_initialized_) {
     return;
   }
 
   has_initialized_ = true;
-  server_->Join();
+  // Worker loading is an in-flight RPC. Notify it before Join, including
+  // when a signal arrives before the main thread has created the API server.
+  while (!shutdown_context.requested() && !stopping_.load()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  stop();
 }
 
 void XllmServer::stop() {
   if (!server_) {
     return;
   }
-  server_->Stop(0);
-  // Join waits for result RPC closures, which may need a shutdown wakeup.
-  // Retain the externally owned service while issuing that notification.
-  if (auto service = worker_service_.lock(); service != nullptr) {
-    service->begin_shutdown();
-  }
-  server_->Join();
+  std::call_once(stop_once_, [this]() {
+    stopping_.store(true);
+    server_->Stop(0);
+    // Join waits for result RPC closures, which may need a shutdown wakeup.
+    // Retain the externally owned service while issuing that notification.
+    if (auto service = worker_service_.lock(); service != nullptr) {
+      service->begin_shutdown();
+    }
+    server_->Join();
+  });
 }
 
 }  // namespace xllm

@@ -393,7 +393,10 @@ WorkerImpl::~WorkerImpl() {
   }
 }
 
-void WorkerImpl::begin_shutdown() { schedule_overlap_.shutdown(); }
+void WorkerImpl::begin_shutdown() {
+  model_load_context_.cancel();
+  schedule_overlap_.shutdown();
+}
 
 void WorkerImpl::drain_pending_execution() {
   if (worker_execution_drained_) {
@@ -583,7 +586,8 @@ void WorkerImpl::allocate_kv_cache_storage(
       .head_dim(args.head_dim())
       .index_head_dim(std::max(args.index_head_dim(), 1))
       .window_size(std::max(args.window_size(), 1))
-      .compress_ratios(args.compress_ratios());
+      .compress_ratios(args.compress_ratios())
+      .kv_source_layer_ids(args.kv_source_layer_ids());
 #if defined(USE_NPU)
   create_options.enable_kv_cache_huge_page_allocator(use_huge_page_allocator);
 #endif
@@ -1658,54 +1662,62 @@ bool WorkerImpl::init_model_impl(std::unique_ptr<ModelLoader> model_loader,
                                  ModelContext context,
                                  std::unique_ptr<Tokenizer> tokenizer,
                                  MasterStatus master_status) {
-  model_weights_path_ = model_loader->model_weights_path();
-  context_ = std::move(context);
-  parallel_args_ = context_.get_parallel_args();
-  dtype_ = context_.get_tensor_options().dtype().toScalarType();
-  tokenizer_ = std::move(tokenizer);
-  // init model, create model executor
-  bool status = this->init_model(context_);
-  if (!status) {
-    LOG(ERROR) << "init_model failed";
+  try {
+    model_load_context_.check_cancelled();
+    model_loader->set_load_context(model_load_context_);
+    model_weights_path_ = model_loader->model_weights_path();
+    context_ = std::move(context);
+    parallel_args_ = context_.get_parallel_args();
+    dtype_ = context_.get_tensor_options().dtype().toScalarType();
+    tokenizer_ = std::move(tokenizer);
+    // init model, create model executor
+    bool status = this->init_model(context_);
+    if (!status) {
+      LOG(ERROR) << "init_model failed";
+      return false;
+    }
+
+    if (tokenizer_) {
+      if (ensure_json_object_grammar(/*reasoning_enabled=*/false) == nullptr) {
+        LOG(WARNING) << "JSON object grammar warmup failed; will retry lazily";
+      }
+      if (ensure_json_object_grammar(/*reasoning_enabled=*/true) == nullptr) {
+        LOG(WARNING)
+            << "JSON reasoning grammar warmup failed; will retry lazily "
+               "on demand";
+      }
+    }
+
+    int32_t tp_world_size = parallel_args_.world_size();
+    if (parallel_args_.tp_group_) {
+      tp_world_size = parallel_args_.tp_group_->world_size();
+    }
+
+    std::unique_ptr<ScopedAtenLoadThreads> scoped_load_threads;
+    const int32_t prev_threads = torch::get_num_threads();
+    LOG(INFO) << "Temporarily setting ATen threads to 1 during weight loading"
+              << ", tp_world_size=" << tp_world_size
+              << ", prev_threads=" << prev_threads;
+    scoped_load_threads =
+        std::make_unique<ScopedAtenLoadThreads>(/*target_threads=*/1);
+
+    if (master_status == MasterStatus::WAKEUP) {
+      this->load_model(std::move(model_loader));
+    } else if (master_status == MasterStatus::LIGHT_SLEEP) {
+      this->lazy_load_model(std::move(model_loader));
+    }
+
+    if (scoped_load_threads) {
+      LOG(INFO) << "Weight loading completed, restored ATen threads="
+                << torch::get_num_threads();
+    }
+
+    status_ = Status::LOADED;
+    return true;
+  } catch (const ModelLoadCancelled&) {
+    LOG(INFO) << "Model initialization cancelled during shutdown";
     return false;
   }
-
-  if (tokenizer_) {
-    if (ensure_json_object_grammar(/*reasoning_enabled=*/false) == nullptr) {
-      LOG(WARNING) << "JSON object grammar warmup failed; will retry lazily";
-    }
-    if (ensure_json_object_grammar(/*reasoning_enabled=*/true) == nullptr) {
-      LOG(WARNING) << "JSON reasoning grammar warmup failed; will retry lazily "
-                      "on demand";
-    }
-  }
-
-  int32_t tp_world_size = parallel_args_.world_size();
-  if (parallel_args_.tp_group_) {
-    tp_world_size = parallel_args_.tp_group_->world_size();
-  }
-
-  std::unique_ptr<ScopedAtenLoadThreads> scoped_load_threads;
-  const int32_t prev_threads = torch::get_num_threads();
-  LOG(INFO) << "Temporarily setting ATen threads to 1 during weight loading"
-            << ", tp_world_size=" << tp_world_size
-            << ", prev_threads=" << prev_threads;
-  scoped_load_threads =
-      std::make_unique<ScopedAtenLoadThreads>(/*target_threads=*/1);
-
-  if (master_status == MasterStatus::WAKEUP) {
-    this->load_model(std::move(model_loader));
-  } else if (master_status == MasterStatus::LIGHT_SLEEP) {
-    this->lazy_load_model(std::move(model_loader));
-  }
-
-  if (scoped_load_threads) {
-    LOG(INFO) << "Weight loading completed, restored ATen threads="
-              << torch::get_num_threads();
-  }
-
-  status_ = Status::LOADED;
-  return true;
 }
 
 torch::Tensor WorkerImpl::select_hidden_states_for_embedding(

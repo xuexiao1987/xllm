@@ -18,9 +18,11 @@ limitations under the License.
 
 #include <torch/types.h>
 
+#include <utility>
 #include <vector>
 
 #include "core/framework/model/model_args.h"
+#include "core/framework/model_loader/model_load_context.h"
 #include "core/framework/quantization/quant_args.h"
 #include "core/framework/state_dict/state_dict.h"
 #include "core/framework/tokenizer/tokenizer.h"
@@ -44,6 +46,11 @@ class ModelLoader {
   virtual std::string model_weights_path() const = 0;
   virtual int64_t get_total_weight_size() const { return 0; }
 
+  void set_load_context(ModelLoadContext context) {
+    load_context_ = std::move(context);
+  }
+  const ModelLoadContext& load_context() const { return load_context_; }
+
   void set_reference_model_weights_path(const std::string& path) {
     reference_model_weights_path_ = path;
   }
@@ -61,6 +68,7 @@ class ModelLoader {
   virtual int64_t get_max_decoder_layer_weight_size() const { return -1; }
 
  protected:
+  ModelLoadContext load_context_;
   // model args
   ModelArgs args_;
   // quantization args

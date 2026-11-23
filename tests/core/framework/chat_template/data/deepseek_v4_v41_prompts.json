@@ -1,0 +1,329 @@
+{
+  "copyright": "Copyright 2026 The xLLM Authors. Licensed under the Apache License, Version 2.0.",
+  "source_commit": "89639378edf7763b9aba4108678ff131e1e3fb3f",
+  "cases": [
+    {
+      "name": "plain-default",
+      "messages": [
+        {
+          "role": "user",
+          "content": "你好 <literal>"
+        }
+      ],
+      "kwargs": {},
+      "v4": "<｜begin▁of▁sentence｜>Reasoning Effort: Absolute maximum with no shortcuts permitted.\nYou MUST be very thorough in your thinking and comprehensively decompose the problem to resolve the root cause, rigorously stress-testing your logic against all potential paths, edge cases, and adversarial scenarios.\nExplicitly write out your entire deliberation process, documenting every intermediate step, considered alternative, and rejected hypothesis to ensure absolutely no assumption is left unchecked.\n\n<｜User｜>你好 <literal><｜Assistant｜><think>",
+      "v41": "<｜begin▁of▁sentence｜><｜System｜>Reasoning Effort: 50 (range 1-100, the higher the value, the more thorough the reasoning)\n\n<｜User｜>你好 <literal><｜Assistant｜><think>"
+    },
+    {
+      "name": "effort-none",
+      "messages": [
+        {
+          "role": "system",
+          "content": "system"
+        },
+        {
+          "role": "user",
+          "content": "question"
+        }
+      ],
+      "kwargs": {
+        "reasoning_effort": "none",
+        "thinking": true
+      },
+      "v4": "<｜begin▁of▁sentence｜>system<｜User｜>question<｜Assistant｜></think>",
+      "v41": "<｜begin▁of▁sentence｜><｜System｜>system<｜User｜>question<｜Assistant｜></think>"
+    },
+    {
+      "name": "effort-low",
+      "messages": [
+        {
+          "role": "system",
+          "content": "system"
+        },
+        {
+          "role": "user",
+          "content": "question"
+        }
+      ],
+      "kwargs": {
+        "reasoning_effort": "low",
+        "thinking": true
+      },
+      "v4": "<｜begin▁of▁sentence｜>system<｜User｜>question<｜Assistant｜><think>",
+      "v41": "<｜begin▁of▁sentence｜><｜System｜>Reasoning Effort: 25 (range 1-100, the higher the value, the more thorough the reasoning)\n\nsystem<｜User｜>question<｜Assistant｜><think>"
+    },
+    {
+      "name": "effort-high",
+      "messages": [
+        {
+          "role": "system",
+          "content": "system"
+        },
+        {
+          "role": "user",
+          "content": "question"
+        }
+      ],
+      "kwargs": {
+        "reasoning_effort": "high",
+        "thinking": true
+      },
+      "v4": "<｜begin▁of▁sentence｜>Reasoning Effort: Absolute maximum with no shortcuts permitted.\nYou MUST be very thorough in your thinking and comprehensively decompose the problem to resolve the root cause, rigorously stress-testing your logic against all potential paths, edge cases, and adversarial scenarios.\nExplicitly write out your entire deliberation process, documenting every intermediate step, considered alternative, and rejected hypothesis to ensure absolutely no assumption is left unchecked.\n\nsystem<｜User｜>question<｜Assistant｜><think>",
+      "v41": "<｜begin▁of▁sentence｜><｜System｜>Reasoning Effort: 50 (range 1-100, the higher the value, the more thorough the reasoning)\n\nsystem<｜User｜>question<｜Assistant｜><think>"
+    },
+    {
+      "name": "effort-xhigh",
+      "messages": [
+        {
+          "role": "system",
+          "content": "system"
+        },
+        {
+          "role": "user",
+          "content": "question"
+        }
+      ],
+      "kwargs": {
+        "reasoning_effort": "xhigh",
+        "thinking": true
+      },
+      "v4": "<｜begin▁of▁sentence｜>Reasoning Effort: Absolute maximum with no shortcuts permitted.\nYou MUST be very thorough in your thinking and comprehensively decompose the problem to resolve the root cause, rigorously stress-testing your logic against all potential paths, edge cases, and adversarial scenarios.\nExplicitly write out your entire deliberation process, documenting every intermediate step, considered alternative, and rejected hypothesis to ensure absolutely no assumption is left unchecked.\n\nsystem<｜User｜>question<｜Assistant｜><think>",
+      "v41": "<｜begin▁of▁sentence｜><｜System｜>Reasoning Effort: 75 (range 1-100, the higher the value, the more thorough the reasoning)\n\nsystem<｜User｜>question<｜Assistant｜><think>"
+    },
+    {
+      "name": "effort-max",
+      "messages": [
+        {
+          "role": "system",
+          "content": "system"
+        },
+        {
+          "role": "user",
+          "content": "question"
+        }
+      ],
+      "kwargs": {
+        "reasoning_effort": "max",
+        "thinking": true
+      },
+      "v4": "<｜begin▁of▁sentence｜>Reasoning Effort: Beyond maximum — exhaustive, relentless, and uncompromising.\nYou MUST reason with the utmost depth and rigor, leaving absolutely nothing to chance: exhaustively decompose the problem into its most fundamental components, trace every causal chain to its root, and resolve the underlying cause rather than any surface symptom.\nDo not stop reasoning until you have independently verified the solution from multiple angles and are certain that no assumption remains unchecked and no error remains undiscovered.\n\nsystem<｜User｜>question<｜Assistant｜><think>",
+      "v41": "<｜begin▁of▁sentence｜><｜System｜>Reasoning Effort: 100 (range 1-100, the higher the value, the more thorough the reasoning)\n\nsystem<｜User｜>question<｜Assistant｜><think>"
+    },
+    {
+      "name": "effort-7",
+      "messages": [
+        {
+          "role": "system",
+          "content": "system"
+        },
+        {
+          "role": "user",
+          "content": "question"
+        }
+      ],
+      "kwargs": {
+        "reasoning_effort": "7",
+        "thinking": true
+      },
+      "v4": "<｜begin▁of▁sentence｜>Reasoning Effort: Absolute maximum with no shortcuts permitted.\nYou MUST be very thorough in your thinking and comprehensively decompose the problem to resolve the root cause, rigorously stress-testing your logic against all potential paths, edge cases, and adversarial scenarios.\nExplicitly write out your entire deliberation process, documenting every intermediate step, considered alternative, and rejected hypothesis to ensure absolutely no assumption is left unchecked.\n\nsystem<｜User｜>question<｜Assistant｜><think>",
+      "v41": "<｜begin▁of▁sentence｜><｜System｜>Reasoning Effort: 7 (range 1-100, the higher the value, the more thorough the reasoning)\n\nsystem<｜User｜>question<｜Assistant｜><think>"
+    },
+    {
+      "name": "effort-bad",
+      "messages": [
+        {
+          "role": "system",
+          "content": "system"
+        },
+        {
+          "role": "user",
+          "content": "question"
+        }
+      ],
+      "kwargs": {
+        "reasoning_effort": "bad",
+        "thinking": true
+      },
+      "v4": "<｜begin▁of▁sentence｜>Reasoning Effort: Absolute maximum with no shortcuts permitted.\nYou MUST be very thorough in your thinking and comprehensively decompose the problem to resolve the root cause, rigorously stress-testing your logic against all potential paths, edge cases, and adversarial scenarios.\nExplicitly write out your entire deliberation process, documenting every intermediate step, considered alternative, and rejected hypothesis to ensure absolutely no assumption is left unchecked.\n\nsystem<｜User｜>question<｜Assistant｜><think>",
+      "v41": "<｜begin▁of▁sentence｜><｜System｜>Reasoning Effort: 50 (range 1-100, the higher the value, the more thorough the reasoning)\n\nsystem<｜User｜>question<｜Assistant｜><think>"
+    },
+    {
+      "name": "merge-user-tool-user",
+      "messages": [
+        {
+          "role": "user",
+          "content": "before"
+        },
+        {
+          "role": "tool",
+          "content": "<x>",
+          "tool_call_id": "x"
+        },
+        {
+          "role": "user",
+          "content": "after"
+        }
+      ],
+      "kwargs": {
+        "thinking": false
+      },
+      "v4": "<｜begin▁of▁sentence｜><｜User｜>before\n\n<tool_result><x></tool_result>\n\nafter<｜Assistant｜></think>",
+      "v41": "<｜begin▁of▁sentence｜><｜User｜>before\n\n<tool_result><x></tool_result>\n\nafter<｜Assistant｜></think>"
+    },
+    {
+      "name": "tool-order-and-unknown",
+      "messages": [
+        {
+          "role": "user",
+          "content": "question"
+        },
+        {
+          "role": "assistant",
+          "content": "invoke",
+          "reasoning": "reason",
+          "tool_calls": [
+            {
+              "id": "a",
+              "name": "lookup_a",
+              "arguments": "{\"text\":\"你好\",\"n\":2}"
+            },
+            {
+              "id": "b",
+              "name": "lookup_b",
+              "arguments": "not-json"
+            },
+            {
+              "id": "c",
+              "name": "lookup_c",
+              "arguments": "[1,2]"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "c",
+          "content": "third"
+        },
+        {
+          "role": "user",
+          "content": "middle"
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "z",
+          "content": "unknown"
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "b",
+          "content": "second"
+        }
+      ],
+      "kwargs": {
+        "thinking": false
+      },
+      "v4": "<｜begin▁of▁sentence｜><｜User｜>question<｜Assistant｜></think>invoke\n\n<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"lookup_a\">\n<｜DSML｜parameter name=\"n\" string=\"false\">2</｜DSML｜parameter>\n<｜DSML｜parameter name=\"text\" string=\"true\">你好</｜DSML｜parameter>\n</｜DSML｜invoke>\n<｜DSML｜invoke name=\"lookup_b\">\n<｜DSML｜parameter name=\"arguments\" string=\"true\">not-json</｜DSML｜parameter>\n</｜DSML｜invoke>\n<｜DSML｜invoke name=\"lookup_c\">\n\n</｜DSML｜invoke>\n</｜DSML｜tool_calls><｜end▁of▁sentence｜><｜User｜><tool_result>unknown</tool_result>\n\nmiddle\n\n<tool_result>second</tool_result>\n\n<tool_result>third</tool_result><｜Assistant｜></think>",
+      "v41": "<｜begin▁of▁sentence｜><｜User｜>question<｜Assistant｜></think>invoke\n\n<｜DSML｜ calls>\n<｜DSML｜ invoke name=\"lookup_a\">\n<｜DSML｜ parameter name=\"n\" string=\"false\">2</｜DSML｜ parameter>\n<｜DSML｜ parameter name=\"text\" string=\"true\">你好</｜DSML｜ parameter>\n</｜DSML｜ invoke>\n<｜DSML｜ invoke name=\"lookup_b\">\n<｜DSML｜ parameter name=\"arguments\" string=\"true\">not-json</｜DSML｜ parameter>\n</｜DSML｜ invoke>\n<｜DSML｜ invoke name=\"lookup_c\">\n\n</｜DSML｜ invoke>\n</｜DSML｜ calls><｜end▁of▁sentence｜><｜User｜><tool_result>second</tool_result>\n\nmiddle\n\n<tool_result>third</tool_result>\n\n<tool_result>unknown</tool_result><｜Assistant｜></think>"
+    },
+    {
+      "name": "history-reasoning",
+      "messages": [
+        {
+          "role": "user",
+          "content": "old"
+        },
+        {
+          "role": "assistant",
+          "content": "answer",
+          "reasoning": "old reason"
+        },
+        {
+          "role": "user",
+          "content": "new"
+        },
+        {
+          "role": "assistant",
+          "content": "next",
+          "reasoning": "new reason"
+        }
+      ],
+      "kwargs": {
+        "thinking": true
+      },
+      "v4": "<｜begin▁of▁sentence｜>Reasoning Effort: Absolute maximum with no shortcuts permitted.\nYou MUST be very thorough in your thinking and comprehensively decompose the problem to resolve the root cause, rigorously stress-testing your logic against all potential paths, edge cases, and adversarial scenarios.\nExplicitly write out your entire deliberation process, documenting every intermediate step, considered alternative, and rejected hypothesis to ensure absolutely no assumption is left unchecked.\n\n<｜User｜>old<｜Assistant｜><think>old reason</think>answer<｜end▁of▁sentence｜><｜User｜>new<｜Assistant｜><think>new reason</think>next<｜end▁of▁sentence｜>",
+      "v41": "<｜begin▁of▁sentence｜><｜System｜>Reasoning Effort: 50 (range 1-100, the higher the value, the more thorough the reasoning)\n\n<｜User｜>old<｜Assistant｜><think>old reason</think>answer<｜end▁of▁sentence｜><｜User｜>new<｜Assistant｜><think>new reason</think>next<｜end▁of▁sentence｜>"
+    },
+    {
+      "name": "empty-blocks",
+      "messages": [
+        {
+          "role": "user",
+          "content": ""
+        },
+        {
+          "role": "tool",
+          "content": "",
+          "tool_call_id": "x"
+        },
+        {
+          "role": "user",
+          "content": "last"
+        }
+      ],
+      "kwargs": {},
+      "v4": "<｜begin▁of▁sentence｜>Reasoning Effort: Absolute maximum with no shortcuts permitted.\nYou MUST be very thorough in your thinking and comprehensively decompose the problem to resolve the root cause, rigorously stress-testing your logic against all potential paths, edge cases, and adversarial scenarios.\nExplicitly write out your entire deliberation process, documenting every intermediate step, considered alternative, and rejected hypothesis to ensure absolutely no assumption is left unchecked.\n\n<｜User｜>\n\n<tool_result></tool_result>\n\nlast<｜Assistant｜><think>",
+      "v41": "<｜begin▁of▁sentence｜><｜System｜>Reasoning Effort: 50 (range 1-100, the higher the value, the more thorough the reasoning)\n\n<｜User｜>\n\n<tool_result></tool_result>\n\nlast<｜Assistant｜><think>"
+    },
+    {
+      "name": "reset-calls",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "",
+          "tool_calls": [
+            {
+              "id": "a",
+              "name": "lookup_a",
+              "arguments": "{\"text\":\"你好\",\"n\":2}"
+            },
+            {
+              "id": "b",
+              "name": "lookup_b",
+              "arguments": "not-json"
+            },
+            {
+              "id": "c",
+              "name": "lookup_c",
+              "arguments": "[1,2]"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": "one",
+          "tool_call_id": "b"
+        },
+        {
+          "role": "assistant",
+          "content": "",
+          "tool_calls": []
+        },
+        {
+          "role": "tool",
+          "content": "two",
+          "tool_call_id": "c"
+        },
+        {
+          "role": "tool",
+          "content": "three",
+          "tool_call_id": "b"
+        }
+      ],
+      "kwargs": {
+        "thinking_mode": "chat"
+      },
+      "v4": "<｜begin▁of▁sentence｜>\n\n<｜DSML｜tool_calls>\n<｜DSML｜invoke name=\"lookup_a\">\n<｜DSML｜parameter name=\"n\" string=\"false\">2</｜DSML｜parameter>\n<｜DSML｜parameter name=\"text\" string=\"true\">你好</｜DSML｜parameter>\n</｜DSML｜invoke>\n<｜DSML｜invoke name=\"lookup_b\">\n<｜DSML｜parameter name=\"arguments\" string=\"true\">not-json</｜DSML｜parameter>\n</｜DSML｜invoke>\n<｜DSML｜invoke name=\"lookup_c\">\n\n</｜DSML｜invoke>\n</｜DSML｜tool_calls><｜end▁of▁sentence｜><｜User｜><tool_result>one</tool_result><｜Assistant｜></think><｜end▁of▁sentence｜><｜User｜><tool_result>two</tool_result>\n\n<tool_result>three</tool_result><｜Assistant｜></think>",
+      "v41": "<｜begin▁of▁sentence｜>\n\n<｜DSML｜ calls>\n<｜DSML｜ invoke name=\"lookup_a\">\n<｜DSML｜ parameter name=\"n\" string=\"false\">2</｜DSML｜ parameter>\n<｜DSML｜ parameter name=\"text\" string=\"true\">你好</｜DSML｜ parameter>\n</｜DSML｜ invoke>\n<｜DSML｜ invoke name=\"lookup_b\">\n<｜DSML｜ parameter name=\"arguments\" string=\"true\">not-json</｜DSML｜ parameter>\n</｜DSML｜ invoke>\n<｜DSML｜ invoke name=\"lookup_c\">\n\n</｜DSML｜ invoke>\n</｜DSML｜ calls><｜end▁of▁sentence｜><｜User｜><tool_result>one</tool_result><｜Assistant｜></think><｜end▁of▁sentence｜><｜User｜><tool_result>two</tool_result>\n\n<tool_result>three</tool_result><｜Assistant｜></think>"
+    }
+  ]
+}

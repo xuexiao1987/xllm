@@ -4,6 +4,15 @@
 include(cc_test)
 
 cc_test(
+  NAME master_signal_test
+  SRCS master_signal_test.cpp
+  DEPS :master GTest::gtest_main
+)
+if(USE_NPU)
+  target_link_libraries(master_signal_test PRIVATE nnopbase)
+endif()
+
+cc_test(
   NO_NPU_RUNTIME
   NAME
     shm_channel_test

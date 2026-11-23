@@ -755,4 +755,31 @@ TEST(ForwardInputFactoryTest, PreparationAdvancesSequenceKvCursor) {
 }
 
 }  // namespace
+
+TEST(ForwardInputFactoryTest, EngramHistoryUsesEachRequestsComputedBoundary) {
+  ScopedGraphMode graph(false);
+  BlockManager::Options options;
+  options.num_blocks(8).block_size(8);
+  BlockManagerImpl manager(options);
+  Sequence first = make_sequence({1, 2, 3, 4, 5}, "engram-chunk");
+  Sequence second = make_sequence({7, 8}, "engram-first");
+  add_kv_block(&first, &manager);
+  add_kv_block(&second, &manager);
+  first.kv_state().set_kv_cache_tokens_num(3);
+  ModelArgs args;
+  args.engram_layer_ids({1}).engram_max_ngram_size(4);
+  BatchGroup batches(1);
+  batches[0].add(&first);
+  batches[0].add(&second);
+  auto factory = make_factory(1);
+  std::vector<LlmForwardInput> inputs;
+  bool warmup = false;
+  factory.create_inputs(batches, args, inputs, warmup);
+  EXPECT_TRUE(
+      torch::equal(inputs[0].input_params.embedding.engram_token_history,
+                   torch::tensor({{3, 2, 1}, {-1, -1, -1}}, torch::kInt32)));
+  EXPECT_TRUE(torch::equal(inputs[0].host_token_ids(),
+                           torch::tensor({4, 5, 7, 8}, torch::kInt32)));
+}
+
 }  // namespace xllm

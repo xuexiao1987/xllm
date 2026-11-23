@@ -30,6 +30,7 @@ cc_library(
     metrics.h
     $<$<BOOL:${USE_NPU}>:mspti_helper.h>
     options.h
+    shutdown_context.h
     rate_limiter.h
     types.h
     flash_comm1_context.h

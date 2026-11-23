@@ -44,6 +44,8 @@ class ScopedWeightLoader:
         strip_src_prefixes: bool = False,
     ) -> None:
         self._state_dicts = state_dicts
+        self._check_load_cancelled = getattr(state_dicts[0], "check_cancelled", None) if state_dicts else None
+        self.check_cancelled()
         self._state_dict_by_key = self._build_state_dict_index(state_dicts)
         self._prefix = prefix
         self._src_prefixes = tuple(src_prefixes)
@@ -52,6 +54,11 @@ class ScopedWeightLoader:
         self._name_aliases = {} if name_aliases is None else name_aliases
         self._name_aliases_callable = callable(self._name_aliases)
         self._strip_src_prefixes = strip_src_prefixes
+
+    def check_cancelled(self) -> None:
+        """Propagate the worker-owned load cancellation without translating errors."""
+        if self._check_load_cancelled is not None:
+            self._check_load_cancelled()
 
     def with_prefix(self, prefix: str) -> ScopedWeightLoader:
         scoped = copy(self)
@@ -122,6 +129,7 @@ class ScopedWeightLoader:
         raise KeyError(f"no checkpoint root among {self._src_prefixes} has {probe!r}")
 
     def get_tensor(self, local_name: str) -> torch.Tensor:
+        self.check_cancelled()
         resolved = self._resolve(local_name)
         if resolved is None:
             raise KeyError(f"checkpoint tensor not found: {self._prefix + local_name}")

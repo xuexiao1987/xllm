@@ -417,12 +417,23 @@ void PyCausalLM::load_model(std::unique_ptr<ModelLoader> loader) {
   py::list py_state_dicts;
   for (const auto& sd : state_dicts) {
     py_state_dicts.append(
-        py::cast(PyStateDict(sd.get()), py::return_value_policy::move));
+        py::cast(PyStateDict(sd.get(), loader->load_context()),
+                 py::return_value_policy::move));
   }
 
-  py_model_.attr("load_weights")(py_state_dicts,
-                                 static_cast<int32_t>(tp_rank_),
-                                 static_cast<int32_t>(tp_size_));
+  try {
+    py_model_.attr("load_weights")(py_state_dicts,
+                                   static_cast<int32_t>(tp_rank_),
+                                   static_cast<int32_t>(tp_size_));
+  } catch (const py::error_already_set& error) {
+    const auto cancelled_type =
+        py::module_::import("xllm_weight_loader").attr("ModelLoadCancelled");
+    if (error.matches(cancelled_type)) {
+      throw ModelLoadCancelled();
+    }
+    throw;
+  }
+  loader->load_context().check_cancelled();
   const std::string& reference_model_path =
       loader->reference_model_weights_path();
   if (!reference_model_path.empty()) {

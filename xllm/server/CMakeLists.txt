@@ -5,9 +5,11 @@ cc_library(
     xllm_server
   HDRS
     xllm_server.h
+    shutdown_signals.h
     xllm_server_registry.h
   SRCS
     xllm_server.cpp
+    shutdown_signals.cpp
     xllm_server_registry.cpp
   DEPS
     :common

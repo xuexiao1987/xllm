@@ -46,7 +46,8 @@ DiTMaster::DiTMaster(const Options& options) : Master(options) {
       << "Basic host KV cache offload is not supported by the DiT engine.";
 
   runtime::Options engine_options;
-  engine_options.model_path(options_.model_path())
+  engine_options.shutdown_context(options_.shutdown_context())
+      .model_path(options_.model_path())
       .model_id(options_.model_id())
       .extension_impl(options_.extension_impl())
       .devices(devices_)

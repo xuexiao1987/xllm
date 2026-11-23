@@ -65,6 +65,7 @@ class ForwardInputBuilder final {
   struct BuilderState {
     // Token and position data
     std::vector<int32_t> flatten_tokens_vec;
+    std::vector<int32_t> engram_token_history;
     std::vector<int32_t> flatten_positions_vec;
     std::vector<torch::Tensor> mrope_positions_vec;
 

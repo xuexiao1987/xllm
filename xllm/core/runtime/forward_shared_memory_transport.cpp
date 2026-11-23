@@ -100,7 +100,7 @@ constexpr PackedInputDomain packed_input_domain() {
   return PackedInputDomain::LLM;
 }
 constexpr uint64_t kPackedInputMagic = 0x584c4c4d494e5032;
-constexpr uint16_t kPackedInputSchemaVersion = 13;
+constexpr uint16_t kPackedInputSchemaVersion = 14;
 constexpr uint32_t kPackedInputHeaderBytes = 40;
 
 struct RawInputLayoutHeader final {
@@ -2334,6 +2334,7 @@ inline void deserialize_forward_input_payload(
   read_vector(context, input_params.embedding.full_block_lease_epochs);
   read_vector(context, input_params.embedding.extra_token_ids);
   read_tensor(context, input_params.mtp_shifted_token_ids, stream);
+  read_tensor(context, input_params.embedding.engram_token_history, stream);
   read_tensor(context, input_params.embedding.mtp_shifted_token_ids, stream);
   read_vector(context, input_params.embedding.mtp_bootstrap_row_idxes);
   read_tensor(context, input_params.embedding.mtp_bootstrap_embeddings, stream);
@@ -2683,6 +2684,7 @@ inline void serialize_forward_input_sections(
                input_params.embedding.full_block_lease_epochs);
   write_vector(context.descriptor, input_params.embedding.extra_token_ids);
   write_tensor(context, input_params.mtp_shifted_token_ids);
+  write_tensor(context, input_params.embedding.engram_token_history);
   write_tensor(context, input_params.embedding.mtp_shifted_token_ids);
   write_vector(context.descriptor,
                input_params.embedding.mtp_bootstrap_row_idxes);

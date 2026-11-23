@@ -19,18 +19,33 @@ models whose native fusion boundaries differ by device keep their lowering in
 ``layers/<device>/`` and select it once when the model is constructed.
 """
 
-from xllm.python.layers.attention import Attention
-from xllm.python.layers.dflash2_grouped_conv import DFlash2GroupedConv
-from xllm.python.layers.embedding import HiddenParallelEmbedding
-from xllm.python.layers.fused_moe import FusedMoE
-from xllm.python.layers.gated_mlp import GatedMLP
-from xllm.python.layers.layernorm import GemmaRMSNorm, RMSNorm
-from xllm.python.layers.linear import ColumnParallelLinear, RowParallelLinear
-from xllm.python.layers.rotary_embedding import (
-    RotaryEmbedding,
-    apply_rotary_half,
-    gather_half_rope_cos_sin,
-)
+from importlib import import_module
+
+# Import only the requested layer. Tensor-only layers must remain usable for
+# host validation before native operators and the device runtime are loaded.
+_LAYER_EXPORTS = {
+    "Attention": "attention",
+    "DFlash2GroupedConv": "dflash2_grouped_conv",
+    "HiddenParallelEmbedding": "embedding",
+    "FusedMoE": "fused_moe",
+    "GatedMLP": "gated_mlp",
+    "GemmaRMSNorm": "layernorm",
+    "RMSNorm": "layernorm",
+    "ColumnParallelLinear": "linear",
+    "RowParallelLinear": "linear",
+    "RotaryEmbedding": "rotary_embedding",
+    "apply_rotary_half": "rotary_embedding",
+    "gather_half_rope_cos_sin": "rotary_embedding",
+}
+
+
+def __getattr__(name: str) -> object:
+    if name not in _LAYER_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(f"{__name__}.{_LAYER_EXPORTS[name]}"), name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "Attention",

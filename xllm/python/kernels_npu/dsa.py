@@ -26,6 +26,23 @@ from __future__ import annotations
 import torch
 
 
+def smla_va_metadata(
+    num_heads_q: int,
+    num_heads_kv: int,
+    head_dim: int,
+    **kwargs: torch.Tensor | int | str | bool | None,
+) -> torch.Tensor:
+    """Build SMLA metadata; the native schema validates optional arguments."""
+    return torch.ops.xllm_ops.smla_va_metadata(num_heads_q, num_heads_kv, head_dim, **kwargs)
+
+
+def smla_va(
+    q: torch.Tensor, **kwargs: torch.Tensor | int | float | str | bool | None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Execute SMLA with independent original/compressed cache lengths."""
+    return torch.ops.xllm_ops.smla_va(q, **kwargs)
+
+
 def hc_pre(
     x: torch.Tensor,
     hc_fn: torch.Tensor,

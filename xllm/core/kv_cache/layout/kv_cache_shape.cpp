@@ -89,6 +89,14 @@ KVCacheShape::KVCacheShape(const KVCacheCapacity& kv_cache_cap,
   CHECK_GT(world_size, 0) << "world_size must be positive.";
   CHECK_GT(kv_cache_cap.block_size(), 0) << "block_size must be positive.";
 
+  if (model_args.model_type() == "deepseek_v41") {
+    shape_kind_ = ShapeKind::GROUPED_POOL;
+    pool_types_ = {BlockType::SWA, BlockType::C2, BlockType::C1};
+    key_cache_shape_ = std::vector<int64_t>{kv_cache_cap.swa_count(),
+                                            kv_cache_cap.c2_count(),
+                                            kv_cache_cap.c1_count()};
+    return;
+  }
   if (util::is_deepseek_v4_model_type(model_args.model_type())) {
     init_dsv4_pool_shape(kv_cache_cap);
     return;
@@ -269,26 +277,41 @@ void KVCacheShape::print_shapes() const {
 
 void KVCacheShape::init_dsv4_pool_shape(const KVCacheCapacity& kv_cache_cap) {
   shape_kind_ = ShapeKind::GROUPED_POOL;
+  pool_types_ = {BlockType::SWA, BlockType::C4, BlockType::C128};
   key_cache_shape_ = std::vector<int64_t>{kv_cache_cap.swa_count(),
                                           kv_cache_cap.c4_count(),
                                           kv_cache_cap.c128_count()};
 }
 
+bool KVCacheShape::has_pool(BlockType type) const {
+  return std::find(pool_types_.begin(), pool_types_.end(), type) !=
+         pool_types_.end();
+}
+
+int64_t KVCacheShape::pool_count(BlockType type) const {
+  const auto it = std::find(pool_types_.begin(), pool_types_.end(), type);
+  CHECK(it != pool_types_.end())
+      << "Missing cache pool " << static_cast<int32_t>(type);
+  return key_cache_shape().at(std::distance(pool_types_.begin(), it));
+}
+
 void KVCacheShape::print_dsv4_pool_shape() const {
-  CHECK(has_key_cache_shape())
-      << "DeepSeek V4 cache shape must contain cache pool counts.";
-  const std::vector<int64_t>& pool_counts = key_cache_shape();
-  CHECK_GE(pool_counts.size(), 3)
-      << "DeepSeek V4 cache shape must be [swa_count, c4_count, c128_count].";
-  LOG(INFO) << "Initializing DSV4 kv cache with shape: [swa_count="
-            << pool_counts[0] << ", c4_count=" << pool_counts[1]
-            << ", c128_count=" << pool_counts[2] << "]";
+  const bool csa2 = has_pool(BlockType::C2);
+  LOG(INFO) << "Initializing grouped kv cache: swa_count="
+            << pool_count(BlockType::SWA)
+            << (csa2 ? ", c2_count=" : ", c4_count=")
+            << pool_count(csa2 ? BlockType::C2 : BlockType::C4)
+            << (csa2 ? ", c1_count=" : ", c128_count=")
+            << pool_count(csa2 ? BlockType::C1 : BlockType::C128);
 }
 
 void KVCacheShape::to_proto(proto::KVCacheShape* proto_shape) const {
   CHECK(proto_shape != nullptr) << "proto_shape must not be nullptr.";
   proto_shape->Clear();
   proto_shape->set_grouped_cache_layout(has_grouped_cache_layout());
+  for (const BlockType type : pool_types_) {
+    proto_shape->add_pool_types(static_cast<int32_t>(type));
+  }
   proto_shape->set_kpool_layout(static_cast<int32_t>(kpool_layout_));
   proto_shape->set_shared_slab_count(shared_slab_count_);
   proto_shape->set_shared_draft_layers(shared_draft_layers_);
@@ -337,6 +360,23 @@ KVCacheShape KVCacheShape::from_proto(const proto::KVCacheShape& proto_shape) {
   }
   if (proto_shape.grouped_cache_layout()) {
     kv_cache_shape.shape_kind_ = ShapeKind::GROUPED_POOL;
+    // Base V4 messages predating explicit identities always use these groups.
+    kv_cache_shape.pool_types_ = {
+        BlockType::SWA, BlockType::C4, BlockType::C128};
+    if (proto_shape.pool_types_size() > 0) {
+      CHECK_EQ(proto_shape.pool_types_size(), 3);
+      kv_cache_shape.pool_types_.clear();
+      for (const int32_t type : proto_shape.pool_types()) {
+        kv_cache_shape.pool_types_.emplace_back(static_cast<BlockType>(type));
+      }
+      const std::vector<BlockType> v4{
+          BlockType::SWA, BlockType::C4, BlockType::C128};
+      const std::vector<BlockType> v41{
+          BlockType::SWA, BlockType::C2, BlockType::C1};
+      CHECK(kv_cache_shape.pool_types_ == v4 ||
+            kv_cache_shape.pool_types_ == v41);
+    }
+    CHECK_EQ(proto_shape.key_cache_shape_size(), 3);
   }
   kv_cache_shape.key_cache_shape_ =
       repeated_field_to_vector(proto_shape.key_cache_shape());

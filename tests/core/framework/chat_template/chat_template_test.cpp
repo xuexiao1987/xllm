@@ -20,6 +20,7 @@ limitations under the License.
 #include "core/framework/config/model_config.h"
 #include "framework/chat_template/chat_template_factory.h"
 #include "framework/chat_template/deepseek_v32_cpp_template.h"
+#include "framework/chat_template/deepseek_v41_cpp_template.h"
 #include "framework/chat_template/deepseek_v4_cpp_template.h"
 #include "framework/chat_template/jinja_chat_template.h"
 #include "framework/tokenizer/tokenizer_args.h"
@@ -79,6 +80,19 @@ TEST(ChatTemplateFactory, DeepseekV4UsesCppTemplateWhenFlagEnabled) {
   EXPECT_EQ(dynamic_cast<JinjaChatTemplate*>(impl.get()), nullptr);
   EXPECT_EQ(dynamic_cast<DeepseekV32CppTemplate*>(impl.get()), nullptr);
   EXPECT_NE(dynamic_cast<DeepseekV4CppTemplate*>(impl.get()), nullptr);
+}
+
+TEST(ChatTemplateFactory, DeepseekV41KeepsNativeTemplateAfterNormalization) {
+  ScopedUseCppChatTemplate scoped_flag(/*enabled=*/true);
+  ModelConfig::get_instance().normalize_cpp_chat_template("deepseek_v41");
+  ASSERT_TRUE(ModelConfig::get_instance().use_cpp_chat_template());
+  const auto impl =
+      ChatTemplateFactory::create(TokenizerArgs{}, "deepseek_v41");
+  ASSERT_NE(dynamic_cast<DeepseekV41CppTemplate*>(impl.get()), nullptr);
+  const auto result = impl->apply_with_generation_mode(
+      {Message("user", "hello")}, {}, nlohmann::ordered_json::object());
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->generation_mode, ChatTemplateGenerationMode::REASONING);
 }
 
 TEST(ChatTemplateFactory, NonDeepseekModelUsesJinjaWhenFlagEnabled) {

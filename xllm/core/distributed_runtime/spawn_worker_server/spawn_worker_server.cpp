@@ -18,8 +18,8 @@ limitations under the License.
 #if defined(USE_NPU)
 #include <acl/acl.h>
 #endif
-#include <signal.h>
-#include <unistd.h>
+#include <chrono>
+#include <thread>
 
 #include "core/common/global_flags.h"
 #include "core/distributed_runtime/worker_server.h"
@@ -95,7 +95,9 @@ SpawnWorkerServer::SpawnWorkerServer(const std::string& master_node_addr,
                                      bool enable_mtp_draft_body_tp1,
                                      bool enable_probabilistic_draft,
                                      const std::string& model_impl,
-                                     const std::string& extension_impl) {
+                                     const std::string& extension_impl,
+                                     ShutdownContext shutdown_context)
+    : shutdown_context_(shutdown_context) {
   // TODO: pass whole xllm::runtime::Options here from main process.
   xllm::runtime::Options runner_options;
   const std::string backend = get_backend_from_worker_type(worker_type);
@@ -106,7 +108,8 @@ SpawnWorkerServer::SpawnWorkerServer(const std::string& master_node_addr,
   const int32_t effective_cfg_size = is_dit_backend ? cfg_size : 1;
   const int32_t effective_text_encoder_tp_size =
       is_dit_backend ? text_encoder_tp_size : 1;
-  runner_options.block_size(block_size)
+  runner_options.shutdown_context(shutdown_context_)
+      .block_size(block_size)
       .backend(backend)
       .model_impl(model_impl)
       .extension_impl(extension_impl)
@@ -207,19 +210,9 @@ SpawnWorkerServer::SpawnWorkerServer(const std::string& master_node_addr,
 
 SpawnWorkerServer::~SpawnWorkerServer() = default;
 
-void SpawnWorkerServer::handle_signal(int signum) {
-  (void)signum;
-  _exit(0);
-}
-
 void SpawnWorkerServer::run() {
-  signal(SIGINT, SpawnWorkerServer::handle_signal);
-  signal(SIGTERM, SpawnWorkerServer::handle_signal);
-  signal(SIGHUP, SpawnWorkerServer::handle_signal);
-
-  // Keep process alive until SIGTERM/SIGINT arrives from parent teardown.
-  while (true) {
-    pause();
+  while (!shutdown_context_.requested()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
 }
 

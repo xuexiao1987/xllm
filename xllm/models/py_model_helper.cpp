@@ -173,6 +173,7 @@ void ensure_python_interpreter() {
 // ---------------------------------------------------------------------------
 
 torch::Tensor PyStateDict::get_tensor(const std::string& name) const {
+  check_cancelled();
   CHECK(sd_ != nullptr) << "PyStateDict: access after release";
   return sd_->get_tensor(name);
 }
@@ -202,7 +203,9 @@ void ensure_xllm_weight_loader_module() {
   py::object module_object =
       py::module_::import("types").attr("ModuleType")(module_name);
   py::module_ module = py::reinterpret_borrow<py::module_>(module_object);
+  py::register_exception<ModelLoadCancelled>(module, "ModelLoadCancelled");
   py::class_<PyStateDict>(module, "StateDict")
+      .def("check_cancelled", &PyStateDict::check_cancelled)
       .def("get_tensor", &PyStateDict::get_tensor, py::arg("name"))
       .def("has", &PyStateDict::has, py::arg("name"))
       .def("keys", &PyStateDict::keys);

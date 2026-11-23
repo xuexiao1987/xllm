@@ -164,16 +164,23 @@ function(cc_test)
     return()
   endif()
 
-  # The GoogleTest source scanner does not match multiline test declarations.
-  # Normalize whitespace only in discovery copies; compile the original sources
-  # and watch them for changes so adding a test still regenerates CTest entries.
+  # Older GoogleTest scanners do not match multiline declarations; newer ones
+  # scan line by line. Flatten only declarations, preserving separate lines
+  # and a final newline so neither scanner loses cases. Compile originals.
   set(_cc_test_discovery_sources "")
   foreach(src IN LISTS _CC_TEST_SRCS)
     get_filename_component(_original_source "${src}" ABSOLUTE
       BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
     file(READ "${_original_source}" _discovery_contents)
-    string(REGEX REPLACE "[\r\n\t]" " "
-      _discovery_contents "${_discovery_contents}")
+    string(REGEX MATCHALL
+      "(TYPED_TEST|TEST)_?[FP]?[ \r\n\t]*\\([ \r\n\t]*[A-Za-z_0-9]+[ \r\n\t]*,[ \r\n\t]*[A-Za-z_0-9]+[ \r\n\t]*\\)"
+      _test_declarations "${_discovery_contents}")
+    foreach(_declaration IN LISTS _test_declarations)
+      string(REGEX REPLACE "[\r\n\t]" " " _single_line "${_declaration}")
+      string(REPLACE "${_declaration}" "${_single_line}"
+        _discovery_contents "${_discovery_contents}")
+    endforeach()
+    string(APPEND _discovery_contents "\n")
     string(SHA256 _source_hash "${_original_source}")
     set(_discovery_source
       "${CMAKE_CURRENT_BINARY_DIR}/gtest-discovery/${_source_hash}.cpp")

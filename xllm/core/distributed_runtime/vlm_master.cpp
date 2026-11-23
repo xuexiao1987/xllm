@@ -38,6 +38,7 @@ limitations under the License.
 #include "core/framework/config/parallel_config_validation.h"
 #include "core/framework/config/speculative_config.h"
 #include "core/framework/model_loader/hf_model_config.h"
+#include "core/framework/model_loader/model_load_context.h"
 #include "core/framework/multimodal/mm_data.h"
 #include "framework/chat_template/jinja_chat_template.h"
 #include "framework/model/model_args.h"
@@ -172,7 +173,8 @@ VLMMaster::VLMMaster(const Options& options) : Master(options) {
          "speculative decoding.";
 
   runtime::Options engine_options;
-  engine_options.model_path(options_.model_path())
+  engine_options.shutdown_context(options_.shutdown_context())
+      .model_path(options_.model_path())
       .model_id(options_.model_id())
       .model_impl(ModelConfig::get_instance().model_impl())
       .extension_impl(options_.extension_impl())
@@ -276,7 +278,11 @@ VLMMaster::VLMMaster(const Options& options) : Master(options) {
           vlm_engine_.get(),
           speculative_engine_.get()));
 
-  auto finish_engine_initialization = [this](auto* engine) {
+  auto finish_engine_initialization = [this](auto* engine, bool initialized) {
+    if (!initialized && options_.shutdown_context().requested()) {
+      throw ModelLoadCancelled();
+    }
+    CHECK(initialized);
     model_args_ = engine->model_args();
     if (options_.enable_service_routing()) {
       XServiceClient* xservice_client = XServiceClient::get_instance();
@@ -296,13 +302,13 @@ VLMMaster::VLMMaster(const Options& options) : Master(options) {
           return draft_model_residency_coordinator_->initialize_model(
               model_loader, num_layers, dp_size, tp_size, master_status);
         };
-    CHECK(speculative_engine_->init(
-        options_.master_status(), prepare_draft, kv_transfer_coordinator_));
-    finish_engine_initialization(speculative_engine_.get());
+    const bool initialized = speculative_engine_->init(
+        options_.master_status(), prepare_draft, kv_transfer_coordinator_);
+    finish_engine_initialization(speculative_engine_.get(), initialized);
   } else {
-    CHECK(
-        vlm_engine_->init(options_.master_status(), kv_transfer_coordinator_));
-    finish_engine_initialization(vlm_engine_.get());
+    const bool initialized =
+        vlm_engine_->init(options_.master_status(), kv_transfer_coordinator_);
+    finish_engine_initialization(vlm_engine_.get(), initialized);
   }
 
   SchedulerOptions scheduler_options;

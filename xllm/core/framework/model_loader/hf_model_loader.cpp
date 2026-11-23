@@ -241,6 +241,7 @@ std::unique_ptr<Tokenizer> HFModelLoader::tokenizer() const {
 }
 
 std::vector<std::unique_ptr<StateDict>>& HFModelLoader::get_state_dicts() {
+  load_context_.check_cancelled();
   if (state_dicts_.empty()) {
     // load state dict
     state_dicts_.reserve(model_weights_files_.size());
@@ -249,6 +250,10 @@ std::vector<std::unique_ptr<StateDict>>& HFModelLoader::get_state_dicts() {
     state_dicts_.resize(model_weights_files_.size());
     for (int file_id = 0; file_id < file_cnt; file_id++) {
       threadpool_->schedule([this, file_id, &counter]() mutable {
+        if (load_context_.cancelled()) {
+          counter.decrement_count();
+          return;
+        }
         LOG(INFO) << "Loading model weights from "
                   << model_weights_files_[file_id];
         state_dicts_[file_id] = std::move(
@@ -258,6 +263,7 @@ std::vector<std::unique_ptr<StateDict>>& HFModelLoader::get_state_dicts() {
     }
     counter.wait();
   }
+  load_context_.check_cancelled();
   return state_dicts_;
 }
 

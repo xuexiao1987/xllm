@@ -24,12 +24,15 @@ limitations under the License.
 
 #include "common/macros.h"
 #include "common/types.h"
+#include "core/common/shutdown_context.h"
 #include "core/framework/eplb/eplb_options.h"
 
 namespace xllm {
 namespace runtime {
 
 struct Options {
+  PROPERTY(ShutdownContext, shutdown_context);
+
   PROPERTY(std::string, model_path);
 
   PROPERTY(std::string, model_id);

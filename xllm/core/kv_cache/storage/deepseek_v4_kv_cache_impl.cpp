@@ -31,6 +31,7 @@ limitations under the License.
 #endif
 #endif
 
+#include "core/kv_cache/layout/csa2_cache_plan.h"
 #include "core/kv_cache/layout/deepseek_v4_cache_policy.h"
 #include "core/kv_cache/layout/kv_cache_shape.h"
 #include "core/kv_cache/storage/kv_cache_utils.h"
@@ -328,6 +329,8 @@ BlockTypeTensorMap DeepSeekV4KVCacheImpl::get_block_type_tensors(
         tensor_map.emplace(KVCacheTensorRole::SWA, swa_cache_);
       }
       break;
+    case BlockType::C2:
+    case BlockType::C1:
     case BlockType::C4:
       if (key_cache_.defined() && key_cache_.numel() > 0 &&
           index_cache_.defined() && index_cache_.numel() > 0) {
@@ -385,9 +388,7 @@ DeepSeekV4KVCacheTensors create_dsv4_cache_tensors(
   CHECK_GT(create_options.window_size(), 0)
       << "DeepSeek V4 window_size must be positive.";
 
-  const int64_t swa_count = pool_counts[0];
-  const int64_t c4_count = pool_counts[1];
-  const int64_t c128_count = pool_counts[2];
+  const int64_t swa_count = kv_cache_shape.pool_count(BlockType::SWA);
   const int64_t block_size = create_options.block_size();
   const int64_t head_dim = create_options.head_dim();
   const int64_t index_head_dim =
@@ -427,6 +428,42 @@ DeepSeekV4KVCacheTensors create_dsv4_cache_tensors(
   };
 
   DeepSeekV4KVCacheTensors tensors;
+  if (kv_cache_shape.has_pool(BlockType::C2)) {
+    const Csa2CachePlan plan(compress_ratios,
+                             create_options.kv_source_layer_ids());
+    tensors.swa_cache = allocate_tensor(KVCacheTensorRole::WINDOW,
+                                        {swa_count, block_size, head_dim},
+                                        create_options.dtype());
+    const auto& layer = plan.layer(layer_idx);
+    if (!layer.owns_main) {
+      return tensors;
+    }
+    tensors.compressed_block_type =
+        layer.ratio == 2 ? BlockType::C2 : BlockType::C1;
+    const int64_t count =
+        kv_cache_shape.pool_count(tensors.compressed_block_type);
+    tensors.key_cache = allocate_tensor(KVCacheTensorRole::KEY,
+                                        {count, block_size, head_dim},
+                                        create_options.dtype());
+    tensors.index_cache = allocate_tensor(KVCacheTensorRole::INDEX,
+                                          {count, block_size, index_head_dim},
+                                          torch::kInt8);
+    tensors.indexer_cache_scale =
+        allocate_tensor(KVCacheTensorRole::INDEX_SCALE,
+                        {count, block_size, 1},
+                        torch::kFloat16);
+    if (layer.owns_state) {
+      const std::vector<int64_t> shape{
+          swa_count, Csa2CachePlan::kStateRows, head_dim};
+      tensors.compress_kv_state =
+          allocate_tensor(KVCacheTensorRole::KV_STATE, shape, torch::kFloat32);
+      tensors.compress_score_state = allocate_tensor(
+          KVCacheTensorRole::SCORE_STATE, shape, torch::kFloat32);
+    }
+    return tensors;
+  }
+  const int64_t c4_count = kv_cache_shape.pool_count(BlockType::C4);
+  const int64_t c128_count = kv_cache_shape.pool_count(BlockType::C128);
   if (compress_ratio == 1) {
     tensors.swa_cache = allocate_tensor(
         KVCacheTensorRole::WINDOW,

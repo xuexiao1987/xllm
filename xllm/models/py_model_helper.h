@@ -20,9 +20,11 @@ limitations under the License.
 
 #include <string>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "core/common/property_reflect.h"
+#include "core/framework/model_loader/model_load_context.h"
 #include "core/framework/state_dict/state_dict.h"
 
 namespace xllm {
@@ -108,7 +110,10 @@ class __attribute__((visibility("hidden"))) PyDictVisitor final
 // pybind11-visible wrapper around StateDict for Python weight loading.
 class PyStateDict {
  public:
-  explicit PyStateDict(const StateDict* sd) : sd_(sd) {}
+  explicit PyStateDict(const StateDict* sd, ModelLoadContext load_context = {})
+      : sd_(sd), load_context_(std::move(load_context)) {}
+
+  void check_cancelled() const { load_context_.check_cancelled(); }
 
   torch::Tensor get_tensor(const std::string& name) const;
   bool has(const std::string& name) const;
@@ -116,6 +121,7 @@ class PyStateDict {
 
  private:
   const StateDict* sd_;
+  ModelLoadContext load_context_;
 };
 
 }  // namespace xllm

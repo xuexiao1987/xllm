@@ -55,8 +55,7 @@ class Master {
   RateLimiter rate_limiter_;
 
  private:
-  static void handle_shutdown_signal(int signum);
-  static std::atomic<bool> idle_running_;
+  std::atomic<bool> idle_running_{false};
   std::thread idle_thread_;
 };
 

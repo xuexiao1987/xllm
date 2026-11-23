@@ -3811,4 +3811,22 @@ TEST_F(SharedSlabKVCacheBlockTest,
   pinned.clear();
 }
 
+TEST(CompositeBlockManagerTest, Csa2AdmissionExportsC2BeforeC1AndReleasesBoth) {
+  auto options = MakeCompositeOptions(64, 4, 8, 2);
+  options.compress_ratios({0, 2, 1}).enable_prefix_cache(false);
+  CompositeBlockManager manager(build_composite_leaves(options), options);
+  Sequence sequence = MakeTestSequence(0, std::vector<int32_t>(13, 7));
+  ASSERT_TRUE(manager.allocate_sequence(&sequence, 13));
+  EXPECT_EQ(sequence.kv_state().num_blocks(BlockType::C2), 2);
+  EXPECT_EQ(sequence.kv_state().num_blocks(BlockType::C1), 4);
+  EXPECT_GE(sequence.kv_state().current_max_tokens_capacity(), 13);
+  const auto view = sequence.kv_state().multi_block_export_view();
+  ASSERT_EQ(view.size(), 3);
+  EXPECT_EQ(view[0].first, BlockType::SWA);
+  EXPECT_EQ(view[1].first, BlockType::C2);
+  EXPECT_EQ(view[2].first, BlockType::C1);
+  manager.deallocate_for_sequence(&sequence, /*cache_prefix=*/false);
+  EXPECT_FALSE(sequence.kv_state().has_any_blocks());
+}
+
 }  // namespace xllm

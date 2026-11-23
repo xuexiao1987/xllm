@@ -33,7 +33,6 @@ linear / MLP / MoE / YaRN-RoPE / weight-loader primitives from
 
 from __future__ import annotations
 
-import threading
 from dataclasses import dataclass, field, replace
 from functools import partial
 from typing import Any, Callable, Sequence
@@ -55,6 +54,7 @@ from xllm.python.layers.embedding import HiddenParallelEmbedding
 from xllm.python.layers.layernorm import RMSNorm
 from xllm.python.layers.linear import ColumnParallelLinear, RowParallelLinear
 from xllm.python.layers.moe_parallel import dp_gather_tokens
+from xllm.python.layers.rotary_embedding import DeepseekRotaryEmbedding as DeepseekV4RotaryEmbedding
 from xllm.python.layers.rotary_embedding import _expand_half_rope_cos_sin
 from xllm.python.model_executor.forward_context import (
     get_forward_context,
@@ -65,6 +65,16 @@ from xllm.python.model_executor.v4_cp_context import DeepseekV4CpContext, build_
 from xllm.python.model_loader import W8A8WeightLoader
 from xllm.python.models.aux_hidden_capture import AuxHiddenCapture
 from xllm.python.models.base import PyModelBase
+from xllm.python.models.deepseek_v4_checkpoint import (
+    find_checkpoint_key,
+    find_checkpoint_prefix,
+    load_deepseek_moe_experts,
+    require_checkpoint_key,
+    require_shape,
+    require_tensor,
+    resolve_dense_mlp_checkpoint,
+    resolve_mlp_projection_names,
+)
 from xllm.python.models.deepseek_v32 import (
     DeepseekV3MLP,
     DeepseekYarnRotaryEmbedding,
@@ -122,59 +132,6 @@ def _pick(d: dict, *keys: str, default: Any = None) -> Any:
     return default
 
 
-def _find_checkpoint_key(loader: W8A8WeightLoader, candidates: Sequence[str]) -> str | None:
-    """Return the first checkpoint key present in compatibility order."""
-    return next((name for name in candidates if loader.has(name)), None)
-
-
-def _require_checkpoint_key(
-    loader: W8A8WeightLoader,
-    candidates: Sequence[str],
-    description: str,
-) -> str:
-    key = _find_checkpoint_key(loader, candidates)
-    if key is None:
-        expected = ", ".join(candidates)
-        raise KeyError(f"{description} not found; expected one of: {expected}")
-    return key
-
-
-def _require_tensor(
-    loader: W8A8WeightLoader,
-    key: str,
-    description: str,
-) -> torch.Tensor:
-    """Return the tensor at a mandatory single checkpoint key."""
-    return loader.get_tensor(_require_checkpoint_key(loader, (key,), description))
-
-
-def _require_shape(
-    tensor: torch.Tensor,
-    expected_shape: tuple[int, ...],
-    tensor_name: str,
-) -> None:
-    actual_shape = tuple(tensor.shape)
-    if actual_shape != expected_shape:
-        raise ValueError(f"DeepSeek-V4 tensor {tensor_name} has shape {actual_shape}, expected {expected_shape}")
-
-
-def _find_checkpoint_prefix(
-    loader: W8A8WeightLoader,
-    candidates: Sequence[str],
-    probes: Sequence[str],
-) -> str | None:
-    """Return the first module prefix containing a supported probe tensor."""
-    return next(
-        (prefix for prefix in candidates if any(loader.has(prefix + probe) for probe in probes)),
-        None,
-    )
-
-
-_DSV4_MLP_NAME_SCHEMES = (
-    ("gate_proj", "up_proj", "down_proj"),
-    ("w1", "w3", "w2"),
-)
-
 _DSV4_MOE_PREFIX_PROBES = ("experts.0.gate_proj.weight", "experts.0.w1.weight")
 
 
@@ -184,7 +141,7 @@ def _resolve_dsv4_moe_prefix(
     label: str,
 ) -> str:
     """Resolve the ffn./mlp. module prefix holding MoE expert weights."""
-    moe_prefix = _find_checkpoint_prefix(
+    moe_prefix = find_checkpoint_prefix(
         loader,
         (checkpoint_prefix + "ffn.", checkpoint_prefix + "mlp."),
         _DSV4_MOE_PREFIX_PROBES,
@@ -192,15 +149,6 @@ def _resolve_dsv4_moe_prefix(
     if moe_prefix is None:
         raise KeyError(f"{label} MoE weights not found under {checkpoint_prefix}")
     return moe_prefix
-
-
-def _resolve_mlp_projection_names(loader: W8A8WeightLoader, checkpoint_prefix: str) -> tuple[str, str, str]:
-    """Resolve native ``gate/up/down`` and legacy ``w1/w3/w2`` names."""
-    for names in _DSV4_MLP_NAME_SCHEMES:
-        if all(loader.has(checkpoint_prefix + name + ".weight") for name in names):
-            return names
-    expected = " or ".join("/".join(names) for names in _DSV4_MLP_NAME_SCHEMES)
-    raise KeyError(f"DeepSeek-V4 MLP projections not found under {checkpoint_prefix}; expected {expected}")
 
 
 def _compress_kv(
@@ -462,92 +410,6 @@ class DeepseekV4Config:
 # ---------------------------------------------------------------------------
 # DeepSeek-V4 RoPE
 # ---------------------------------------------------------------------------
-
-
-class DeepseekV4RotaryEmbedding(nn.Module):
-    """Compact-cache equivalent of C++ DeepseekV4RotaryEmbedding.
-
-    C++ keeps cache length and YaRN's old-context length as separate inputs.
-    The generic Python DeepseekYarnRotaryEmbedding derives cache length as
-    ``old_context * factor``, which cannot represent the native DSV4 call.
-    """
-
-    _cache_lock = threading.Lock()
-    _cache_by_descriptor: dict[tuple[Any, ...], torch.Tensor] = {}
-
-    def __init__(
-        self,
-        rotary_dim: int,
-        max_position_embeddings: int,
-        scaling_factor: float,
-        theta: float,
-        beta_fast: int,
-        beta_slow: int,
-        old_context_len: int,
-        dtype: torch.dtype,
-        device: torch.device,
-    ) -> None:
-        super().__init__()
-        descriptor = (
-            rotary_dim,
-            max_position_embeddings,
-            scaling_factor,
-            theta,
-            beta_fast,
-            beta_slow,
-            old_context_len,
-            dtype,
-            torch.device(device),
-        )
-        with self._cache_lock:
-            cache = self._cache_by_descriptor.get(descriptor)
-            if cache is None:
-                cache = self._build_cache(
-                    rotary_dim,
-                    max_position_embeddings,
-                    scaling_factor,
-                    theta,
-                    beta_fast,
-                    beta_slow,
-                    old_context_len,
-                    dtype,
-                    device,
-                )
-                self._cache_by_descriptor[descriptor] = cache
-        self.register_buffer("cos_sin_cache", cache, persistent=False)
-
-    @staticmethod
-    def _build_cache(
-        rotary_dim: int,
-        max_position_embeddings: int,
-        scaling_factor: float,
-        theta: float,
-        beta_fast: int,
-        beta_slow: int,
-        old_context_len: int,
-        dtype: torch.dtype,
-        device: torch.device,
-    ) -> torch.Tensor:
-        # Match C++ rotary::apply_deepseek_yarn_rope_scaling() and
-        # create_cos_sin_tensor(): build the cache in CPU float32, then perform
-        # one final transfer/conversion to the model device and dtype. Computing
-        # pow/cos/sin directly on NPU can change BF16 cache entries by one ULP.
-        cpu = torch.device("cpu")
-        inv_freq = DeepseekYarnRotaryEmbedding._yarn_inv_freq(
-            scaling_factor,
-            rotary_dim,
-            theta,
-            beta_fast,
-            beta_slow,
-            old_context_len,
-            cpu,
-        )
-        positions = torch.arange(max_position_embeddings, dtype=torch.float32, device=cpu)
-        freqs = torch.outer(positions, inv_freq)
-        # Keep one value per frequency. Call sites repeat_interleave to the
-        # same [position, rotary_dim] interleaved layout C++ stores directly.
-        cache = torch.cat([freqs.cos(), freqs.sin()], dim=-1).to(device=device, dtype=dtype)
-        return cache.contiguous()
 
 
 # ---------------------------------------------------------------------------
@@ -1237,6 +1099,8 @@ class DeepseekV4MoE(nn.Module):
     FusedMoEImpl::forward_with_selected_experts.
     """
 
+    _SHARED_MLP_CLS = DeepseekV3MLP
+
     def __init__(self, cfg: DeepseekV4Config, layer_id: int, dtype: torch.dtype, device: torch.device) -> None:
         super().__init__()
         self.cfg = cfg
@@ -1312,7 +1176,7 @@ class DeepseekV4MoE(nn.Module):
         # Shared expert uses the orthogonal MoE TP group, matching C++
         # FusedMoEImpl. skip_tp_reduce keeps collective ordering in this class.
         shared_cfg = replace(cfg, tp_size=self.moe_tp_size, tp_rank=self.moe_tp_rank)
-        self.shared_experts = DeepseekV3MLP(
+        self.shared_experts = self._SHARED_MLP_CLS(
             shared_cfg,
             cfg.moe_intermediate_size * cfg.n_shared_experts,
             dtype,
@@ -1896,7 +1760,7 @@ class DeepseekV4ForCausalLM(PyModelBase):
                 loader.load_projection,
                 suffixes=("weight", "weight_scale", "weight_offset"),
             )
-        attention_prefix = _find_checkpoint_prefix(
+        attention_prefix = find_checkpoint_prefix(
             loader,
             (
                 checkpoint_prefix + "attn.",
@@ -1942,7 +1806,7 @@ class DeepseekV4ForCausalLM(PyModelBase):
             loader.get_tensor(attention_prefix + "kv_norm.weight"),
         )
 
-        sink_key = _find_checkpoint_key(
+        sink_key = find_checkpoint_key(
             loader,
             (
                 attention_prefix + "attn_sink",
@@ -2079,22 +1943,22 @@ class DeepseekV4ForCausalLM(PyModelBase):
         missing_message: str,
     ) -> None:
         """Resolve a compressor prefix and load its compatible aliases."""
-        checkpoint_prefix = _find_checkpoint_prefix(loader, checkpoint_prefixes, _DSV4_COMPRESSOR_PROBES)
+        checkpoint_prefix = find_checkpoint_prefix(loader, checkpoint_prefixes, _DSV4_COMPRESSOR_PROBES)
         if checkpoint_prefix is None:
             raise KeyError(missing_message)
-        wkv_key = _find_checkpoint_key(
+        wkv_key = find_checkpoint_key(
             loader,
             tuple(checkpoint_prefix + suffix for suffix in _DSV4_COMPRESSOR_WKV_ALIASES),
         )
         if wkv_key is not None:
             wkv = loader.get_tensor(wkv_key)
         else:
-            wk_key = _require_checkpoint_key(
+            wk_key = require_checkpoint_key(
                 loader,
                 tuple(checkpoint_prefix + suffix for suffix in _DSV4_COMPRESSOR_WK_ALIASES),
                 "DeepSeek-V4 compressor K projection",
             )
-            wv_key = _require_checkpoint_key(
+            wv_key = require_checkpoint_key(
                 loader,
                 tuple(checkpoint_prefix + suffix for suffix in _DSV4_COMPRESSOR_WV_ALIASES),
                 "DeepSeek-V4 compressor V projection",
@@ -2106,7 +1970,7 @@ class DeepseekV4ForCausalLM(PyModelBase):
         loader.copy_in(parameter_prefix + "wkv.weight", wkv)
 
         for parameter_suffix, source_suffixes in _DSV4_COMPRESSOR_PARAMETER_ALIASES.items():
-            source_key = _require_checkpoint_key(
+            source_key = require_checkpoint_key(
                 loader,
                 tuple(checkpoint_prefix + suffix for suffix in source_suffixes),
                 f"DeepSeek-V4 compressor {parameter_suffix}",
@@ -2124,17 +1988,7 @@ class DeepseekV4ForCausalLM(PyModelBase):
         mlp: DeepseekV3MLP,
     ) -> None:
         """Load a dense W8A8 MLP using the key aliases accepted by C++."""
-        source_prefix = next(
-            (
-                prefix
-                for prefix in (checkpoint_prefix + "ffn.", checkpoint_prefix + "mlp.")
-                if any(all(loader.has(prefix + name + ".weight") for name in names) for names in _DSV4_MLP_NAME_SCHEMES)
-            ),
-            None,
-        )
-        if source_prefix is None:
-            raise KeyError(f"DeepSeek-V4 dense MLP weights not found under {checkpoint_prefix}")
-        gate_name, up_name, down_name = _resolve_mlp_projection_names(loader, source_prefix)
+        source_prefix, (gate_name, up_name, down_name) = resolve_dense_mlp_checkpoint(loader, checkpoint_prefix)
         gate_up_prefix = parameter_prefix + "mlp.gate_up_proj."
         down_prefix = parameter_prefix + "mlp.down_proj."
         for suffix in ("weight", "weight_scale", "weight_offset"):
@@ -2167,7 +2021,7 @@ class DeepseekV4ForCausalLM(PyModelBase):
             loader.get_tensor(gate_prefix + "weight"),
         )
         if mlp.hash_layer:
-            tid2eid_key = _require_checkpoint_key(
+            tid2eid_key = require_checkpoint_key(
                 loader,
                 (
                     gate_prefix + "tid2eid",
@@ -2181,7 +2035,7 @@ class DeepseekV4ForCausalLM(PyModelBase):
             )
             return
 
-        bias_key = _require_checkpoint_key(
+        bias_key = require_checkpoint_key(
             loader,
             (
                 gate_prefix + "bias",
@@ -2211,7 +2065,7 @@ class DeepseekV4ForCausalLM(PyModelBase):
 
         cfg = self.cfg
         mlp = self.model.layers[layer_id].mlp
-        gate_prefix = _find_checkpoint_prefix(
+        gate_prefix = find_checkpoint_prefix(
             loader,
             (
                 source_prefix + "gate.",
@@ -2222,226 +2076,18 @@ class DeepseekV4ForCausalLM(PyModelBase):
         if gate_prefix is None:
             raise KeyError(f"DeepSeek-V4 layer {layer_id} routing gate weight not found")
         self._load_dsv4_moe_routing(loader, gate_prefix, pm, mlp, layer_id)
-        # Per-expert w1+w3 -> fused w13, w2 -> w2 (int8 + scale).
-        # EP: only load local experts [start_expert_id, start_expert_id + num_experts_per_rank).
-        tp = mlp.moe_tp_size
-        tp_rank = mlp.moe_tp_rank
-        start = mlp.start_expert_id
-        nepr = mlp.num_experts_per_rank
-        w13 = self.get_parameter(pm + "mlp.experts_w13")
-        w2 = self.get_parameter(pm + "mlp.experts_w2")
-        w13_scale = self.get_buffer(pm + "mlp.experts_w13_scale")
-        w13_scale_second = self.get_buffer(pm + "mlp.experts_w13_scale_second")
-        w2_scale = self.get_buffer(pm + "mlp.experts_w2_scale")
-        w2_scale_second = self.get_buffer(pm + "mlp.experts_w2_scale_second")
-        w13_offset = self.get_buffer(pm + "mlp.experts_w13_offset")
-        w2_offset = self.get_buffer(pm + "mlp.experts_w2_offset")
-        w13_scale_bias = self.get_buffer(pm + "mlp.experts_w13_scale_bias")
-        w2_scale_bias = self.get_buffer(pm + "mlp.experts_w2_scale_bias")
-
-        def _shard_fused(first: torch.Tensor, second: torch.Tensor) -> torch.Tensor:
-            """Shard w1/w3 independently, matching LOAD_MOE_FUSED_WEIGHT."""
-            if tp > 1:
-                first = loader.shard(first, dim=0, world=tp, rank=tp_rank)
-                second = loader.shard(second, dim=0, world=tp, rank=tp_rank)
-            return torch.cat([first, second], dim=0)
-
-        probe = source_prefix + f"experts.{start}."
-        gate_name, up_name, down_name = _resolve_mlp_projection_names(loader, probe)
-        probe_gate = loader.get_tensor(probe + gate_name + ".weight")
-        if probe_gate.dtype != torch.int8 or probe_gate.dim() != 2 or probe_gate.shape[1] != cfg.hidden_size:
-            raise ValueError(
-                "DeepSeek-V4 expert gate weight must be a two-dimensional INT8 tensor "
-                f"with input width {cfg.hidden_size}, got dtype={probe_gate.dtype}, "
-                f"shape={tuple(probe_gate.shape)}"
-            )
-        if probe_gate.shape[0] == cfg.moe_intermediate_size:
-            is_w4a8 = False
-        elif cfg.moe_intermediate_size % 2 == 0 and probe_gate.shape[0] * 2 == cfg.moe_intermediate_size:
-            is_w4a8 = True
-        else:
-            raise ValueError(
-                "DeepSeek-V4 expert gate weight rows must match either W8A8 or packed W4A8 layout: "
-                f"rows={probe_gate.shape[0]}, intermediate_size={cfg.moe_intermediate_size}"
-            )
-        if is_w4a8 and cfg.hidden_size % 2 != 0:
-            raise ValueError(f"DeepSeek-V4 packed W4A8 requires an even hidden size, got {cfg.hidden_size}")
-        mlp.w4a8_dynamic = is_w4a8
-        device = w13.device
-        if is_w4a8:
-            w13.data = torch.empty(
-                nepr, cfg.moe_intermediate_size // tp, cfg.hidden_size, dtype=torch.int8, device=device
-            )
-            w2.data = torch.empty(
-                nepr, cfg.hidden_size // 2, cfg.moe_intermediate_size // tp, dtype=torch.int8, device=device
-            )
-            w13_scale.data = torch.empty(
-                nepr, 2 * (cfg.moe_intermediate_size // tp), 1, dtype=torch.float32, device=device
-            )
-            w2_scale.data = torch.empty(nepr, cfg.hidden_size, 1, dtype=torch.float32, device=device)
-            w13_offset.data = torch.empty_like(w13_scale)
-            w2_offset.data = torch.empty_like(w2_scale)
-            w13_scale_bias.data = torch.empty(
-                nepr, 2 * (cfg.moe_intermediate_size // tp), 1, dtype=torch.float32, device=device
-            )
-            sb2 = _require_tensor(
-                loader,
-                probe + down_name + ".scale_bias",
-                f"DeepSeek-V4 W4A8 expert {start} down scale bias",
-            )
-            if tp > 1:
-                sb2 = loader.shard(sb2, dim=1, world=tp, rank=tp_rank)
-            w2_scale_bias.data = torch.empty(nepr, *sb2.shape, dtype=torch.float32, device=device)
-        else:
-            inter_local = cfg.moe_intermediate_size // tp
-            w13.data = torch.empty(nepr, 2 * inter_local, cfg.hidden_size, dtype=torch.int8, device=device)
-            w2.data = torch.empty(nepr, cfg.hidden_size, inter_local, dtype=torch.int8, device=device)
-            w13_scale.data = torch.empty(nepr, 2 * inter_local, 1, dtype=torch.float32, device=device)
-            w2_scale.data = w2_scale.new_empty((nepr, cfg.hidden_size, 1))
-            w13_offset.data = torch.zeros_like(w13_scale)
-            w2_offset.data = torch.zeros_like(w2_scale, dtype=torch.float32)
-        for local_idx in range(nepr):
-            global_id = start + local_idx
-            e = source_prefix + f"experts.{global_id}."
-            gate_weight = probe_gate if local_idx == 0 else loader.get_tensor(e + gate_name + ".weight")
-            up_weight = loader.get_tensor(e + up_name + ".weight")
-            w2_j = loader.get_tensor(e + down_name + ".weight")
-            packed_divisor = 2 if is_w4a8 else 1
-            _require_shape(
-                gate_weight,
-                (cfg.moe_intermediate_size // packed_divisor, cfg.hidden_size),
-                e + gate_name + ".weight",
-            )
-            _require_shape(
-                up_weight,
-                (cfg.moe_intermediate_size // packed_divisor, cfg.hidden_size),
-                e + up_name + ".weight",
-            )
-            _require_shape(
-                w2_j,
-                (cfg.hidden_size // packed_divisor, cfg.moe_intermediate_size),
-                e + down_name + ".weight",
-            )
-            if gate_weight.dtype != torch.int8 or up_weight.dtype != torch.int8 or w2_j.dtype != torch.int8:
-                raise ValueError(f"DeepSeek-V4 expert weights under {e} must use INT8 storage")
-            w13_j = _shard_fused(gate_weight, up_weight)
-            if tp > 1:
-                w2_j = loader.shard(w2_j, dim=1, world=tp, rank=tp_rank)
-            w13[local_idx].copy_(w13_j.to(w13.dtype))
-            w2[local_idx].copy_(w2_j.to(w2.dtype))
-            # Legacy exports can share the gate scale with the up projection.
-            gate_scale = _require_tensor(
-                loader,
-                e + gate_name + ".weight_scale",
-                f"DeepSeek-V4 expert {global_id} gate scale",
-            )
-            up_scale_key = (
-                e + up_name + ".weight_scale"
-                if loader.has(e + up_name + ".weight_scale")
-                else e + gate_name + ".weight_scale"
-            )
-            s13 = _shard_fused(gate_scale, loader.get_tensor(up_scale_key))
-            _require_shape(s13, tuple(w13_scale[local_idx].shape), f"{e}gate/up weight_scale")
-            w13_scale[local_idx].copy_(s13)
-            if is_w4a8:
-                gate_second_key = e + gate_name + ".weight_scale_second"
-                if loader.has(gate_second_key):
-                    s1_second = loader.get_tensor(gate_second_key)
-                    up_second_key = e + up_name + ".weight_scale_second"
-                    s3_second = loader.get_tensor(up_second_key) if loader.has(up_second_key) else s1_second
-                    s13_second = _shard_fused(s1_second, s3_second)
-                    if w13_scale_second.numel() == 0:
-                        w13_scale_second.data = torch.empty(nepr, *s13_second.shape, dtype=torch.float32, device=device)
-                    w13_scale_second[local_idx].copy_(s13_second)
-                sb13 = _shard_fused(
-                    _require_tensor(
-                        loader,
-                        e + gate_name + ".scale_bias",
-                        f"DeepSeek-V4 W4A8 expert {global_id} gate scale bias",
-                    ),
-                    _require_tensor(
-                        loader,
-                        e + up_name + ".scale_bias",
-                        f"DeepSeek-V4 W4A8 expert {global_id} up scale bias",
-                    ),
-                )
-                _require_shape(sb13, tuple(w13_scale_bias[local_idx].shape), f"{e}gate/up scale_bias")
-                w13_scale_bias[local_idx].copy_(sb13)
-            down_scale_key = e + down_name + ".weight_scale"
-            down_scale = _require_tensor(
-                loader,
-                down_scale_key,
-                f"DeepSeek-V4 expert {global_id} down scale",
-            )
-            _require_shape(down_scale, tuple(w2_scale[local_idx].shape), down_scale_key)
-            w2_scale[local_idx].copy_(down_scale)
-            if is_w4a8:
-                down_second_key = e + down_name + ".weight_scale_second"
-                if loader.has(down_second_key):
-                    s2_second = loader.get_tensor(down_second_key)
-                    if tp > 1:
-                        s2_second = loader.shard(s2_second, dim=1, world=tp, rank=tp_rank)
-                    if w2_scale_second.numel() == 0:
-                        w2_scale_second.data = torch.empty(nepr, *s2_second.shape, dtype=torch.float32, device=device)
-                    w2_scale_second[local_idx].copy_(s2_second)
-                down_bias_key = e + down_name + ".scale_bias"
-                s2_bias = _require_tensor(
-                    loader,
-                    down_bias_key,
-                    f"DeepSeek-V4 W4A8 expert {global_id} down scale bias",
-                )
-                if tp > 1:
-                    s2_bias = loader.shard(s2_bias, dim=1, world=tp, rank=tp_rank)
-                _require_shape(s2_bias, tuple(w2_scale_bias[local_idx].shape), down_bias_key)
-                w2_scale_bias[local_idx].copy_(s2_bias)
-        # Shared experts: checkpoint has w1/w2/w3 (W8A8 dynamic), fuse w1+w3 -> gate_up_proj.
-        se = source_prefix + "shared_experts."
-        shared_gate_keys = (
-            source_prefix + "shared_expert_gate.weight",
-            source_prefix + "shared_experts_gate.weight",
+        load_deepseek_moe_experts(
+            loader,
+            mlp,
+            source_prefix,
+            pm,
+            hidden_size=cfg.hidden_size,
+            intermediate_size=cfg.moe_intermediate_size,
         )
-        shared_gate_key = _find_checkpoint_key(loader, shared_gate_keys)
-        if shared_gate_key is not None:
-            loader.copy_in(
-                pm + "mlp.shared_expert_gate.weight",
-                loader.get_tensor(shared_gate_key),
-            )
-            mlp.shared_expert_gate_is_loaded = True
-        if loader.has(se + "gate_proj.weight") or loader.has(se + "w1.weight"):
-            shared_gate_name, shared_up_name, shared_down_name = _resolve_mlp_projection_names(loader, se)
-            se_w1 = loader.get_tensor(se + shared_gate_name + ".weight")
-            se_w3 = loader.get_tensor(se + shared_up_name + ".weight")
-            se_w13 = _shard_fused(se_w1, se_w3)
-            loader.copy_in(pm + "mlp.shared_experts.gate_up_proj.weight", se_w13)
-            if loader.has(se + shared_gate_name + ".weight_scale"):
-                s1 = loader.get_tensor(se + shared_gate_name + ".weight_scale")
-                s3 = loader.get_tensor(se + shared_up_name + ".weight_scale")
-                se_s13 = _shard_fused(s1, s3)
-                loader.copy_in(pm + "mlp.shared_experts.gate_up_proj.weight_scale", se_s13[: se_w13.size(0)])
-            if loader.has(se + shared_gate_name + ".weight_offset"):
-                o1 = loader.get_tensor(se + shared_gate_name + ".weight_offset")
-                o3 = loader.get_tensor(se + shared_up_name + ".weight_offset")
-                loader.copy_in(
-                    pm + "mlp.shared_experts.gate_up_proj.weight_offset", _shard_fused(o1, o3)[: se_w13.size(0)]
-                )
-            se_w2 = loader.get_tensor(se + shared_down_name + ".weight")
-            if tp > 1:
-                se_w2 = loader.shard(se_w2, dim=1, world=tp, rank=tp_rank)
-            loader.copy_in(pm + "mlp.shared_experts.down_proj.weight", se_w2)
-            if loader.has(se + shared_down_name + ".weight_scale"):
-                loader.copy_in(
-                    pm + "mlp.shared_experts.down_proj.weight_scale",
-                    loader.get_tensor(se + shared_down_name + ".weight_scale"),
-                )
-            if loader.has(se + shared_down_name + ".weight_offset"):
-                loader.copy_in(
-                    pm + "mlp.shared_experts.down_proj.weight_offset",
-                    loader.get_tensor(se + shared_down_name + ".weight_offset"),
-                )
-            # NOTE: shared_experts.{gate_up,down}_proj.process_weights_after_loading
-            # is NOT called here. It is called exactly once via
-            # DeepseekV4MoE.process_weights_after_loading (line ~816) at the end of
-            # the per-layer load loop (load_weights line ~1187). Calling it here
-            # too would transpose the weight twice (process_weights is not
-            # idempotent), leaving it in [out, in] layout and tripping quant_matmul
-            # "x1 dim[-1] must match x2 dim[-2], got 4096 vs 512".
+        # NOTE: shared_experts.{gate_up,down}_proj.process_weights_after_loading
+        # is NOT called here. It is called exactly once via
+        # DeepseekV4MoE.process_weights_after_loading (line ~816) at the end of
+        # the per-layer load loop (load_weights line ~1187). Calling it here
+        # too would transpose the weight twice (process_weights is not
+        # idempotent), leaving it in [out, in] layout and tripping quant_matmul
+        # "x1 dim[-1] must match x2 dim[-2], got 4096 vs 512".

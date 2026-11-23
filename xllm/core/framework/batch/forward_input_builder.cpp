@@ -512,6 +512,9 @@ void ForwardInputBuilder::process_sequences_multithreaded() {
 
   // Merge results from all threads
   for (auto& state : thread_builder_states) {
+    state_.engram_token_history.insert(state_.engram_token_history.end(),
+                                       state.engram_token_history.begin(),
+                                       state.engram_token_history.end());
     state_.flatten_tokens_vec.insert(state_.flatten_tokens_vec.end(),
                                      state.flatten_tokens_vec.begin(),
                                      state.flatten_tokens_vec.end());
@@ -725,6 +728,16 @@ void ForwardInputBuilder::extract_tokens_and_positions(
   BuilderState& state = state_ptr ? *state_ptr : state_;
   const auto& token_ids = sequence->tokens();
   const uint32_t n_tokens = token_ids.size();
+  if (args_ && !args_->engram_layer_ids().empty()) {
+    const int32_t history_width = args_->engram_max_ngram_size() - 1;
+    state.engram_token_history.reserve(state.engram_token_history.size() +
+                                       history_width);
+    for (int32_t offset = 1; offset <= history_width; ++offset) {
+      const int64_t position = static_cast<int64_t>(n_kv_cache_tokens) - offset;
+      state.engram_token_history.emplace_back(
+          position >= 0 ? token_ids[position] : -1);
+    }
+  }
   const auto& sample_slots = sequence->sample_slots();
 
   // Handle MRope positions
@@ -1186,6 +1199,12 @@ Input ForwardInputBuilder::build_forward_input() {
   }
 
   // Setup grouped cache block tables.
+  if (args_ && !args_->engram_layer_ids().empty()) {
+    input_params.embedding.engram_token_history =
+        make_cpu_tensor(state_.engram_token_history)
+            .reshape({input_params.meta.num_sequences,
+                      args_->engram_max_ngram_size() - 1});
+  }
   input_params.multi_block_tables =
       util::gather_block_tables(state_.multi_block_tables);
 

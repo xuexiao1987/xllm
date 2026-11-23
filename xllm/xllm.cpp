@@ -60,6 +60,7 @@ namespace py = pybind11;
 #include "core/framework/config/service_config.h"
 #include "core/framework/config/speculative_config.h"
 #include "core/framework/model_loader/hf_model_config.h"
+#include "core/framework/model_loader/model_load_context.h"
 #if defined(USE_NPU) || defined(USE_MLU) || defined(USE_DCU)
 #include "core/framework/transfer/mooncake_transfer_engine.h"
 #endif
@@ -75,6 +76,7 @@ namespace py = pybind11;
 #include "core/util/verbose_trace_logger.h"
 #include "function_call/function_call_parser.h"
 #include "parser/reasoning_parser.h"
+#include "server/shutdown_signals.h"
 #include "server/xllm_server_registry.h"
 using namespace xllm;
 
@@ -356,6 +358,7 @@ void validate_config(const std::string& model_type) {
 }
 
 int run() {
+  ShutdownSignals shutdown_signals;
   ModelConfig& model_config = ModelConfig::get_instance();
   LoadConfig& load_config = LoadConfig::get_instance();
   KVCacheConfig& kv_cache_config = KVCacheConfig::get_instance();
@@ -433,6 +436,8 @@ int run() {
       service_config.host() + ":" + std::to_string(service_config.port()),
       is_local);
 
+  options.shutdown_context(shutdown_signals.context());
+
   InstanceName::name()->set_name(options.instance_name().value_or(""));
 
   // master node
@@ -469,8 +474,16 @@ int run() {
     }
   }
 
-  std::unique_ptr<Master> master =
-      create_master(model_config.backend(), options);
+  std::unique_ptr<Master> master;
+  try {
+    master = create_master(model_config.backend(), options);
+  } catch (const ModelLoadCancelled&) {
+    LOG(INFO) << "Model startup cancelled; worker resources released";
+    return 0;
+  }
+  if (options.shutdown_context().requested()) {
+    return 0;
+  }
   master->run();
 
   // supported models
@@ -486,7 +499,8 @@ int run() {
         ServerRegistry::get_instance().register_server("HttpServer");
 
     // start brpc server
-    if (!xllm_server->start(std::move(api_service))) {
+    if (!xllm_server->start(std::move(api_service),
+                            options.shutdown_context())) {
       LOG(ERROR) << "Failed to start brpc server on port "
                  << service_config.port();
       return -1;
@@ -562,24 +576,27 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  int32_t exit_code = 0;
 #if defined(USE_NPU)
-  // Keep Python alive until run() has destroyed the master and its workers.
-  // Reacquire the GIL before finalization so Python atexit hooks run before
-  // extension-module static destructors (including Triton's pybind objects).
-  py::scoped_interpreter interpreter(/*init_signal_handlers=*/false);
-  if (!initialize_npu_startup()) {
-    return 1;
-  }
-  py::gil_scoped_release release;
+  {
+    // Keep Python alive until run() has destroyed the master and its workers.
+    // Reacquire the GIL before finalization so Python atexit hooks run before
+    // extension-module static destructors (including Triton's pybind objects).
+    py::scoped_interpreter interpreter(/*init_signal_handlers=*/false);
+    if (!initialize_npu_startup()) {
+      return 1;
+    }
+    py::gil_scoped_release release;
 #endif
 
-  const int32_t exit_code = run();
+    exit_code = run();
 #if defined(USE_NPU) || defined(USE_MLU) || defined(USE_DCU)
-  // Master and workers have stopped. Release the shared transport before
-  // Python/device finalization and its dependencies' static destructors.
-  MooncakeTransferEngineCore::get_instance().shutdown();
+    // Master and workers have stopped. Release the shared transport before
+    // Python/device finalization and its dependencies' static destructors.
+    MooncakeTransferEngineCore::get_instance().shutdown();
 #endif
 #if defined(USE_NPU)
+  }  // Reacquire the GIL and run Python/device exit hooks before hard exit.
   // Static teardown would release the embedded-CPython pybind11 objects
   // without the GIL and abort; flush logs/stdio, then hard-exit.
   google::FlushLogFiles(google::GLOG_INFO);

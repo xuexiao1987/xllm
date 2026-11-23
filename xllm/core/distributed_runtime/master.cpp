@@ -202,12 +202,6 @@ Master::Master(const Options& options) : options_(options) {
   }
 }
 
-std::atomic<bool> Master::idle_running_{false};
-
-void Master::handle_shutdown_signal(int /*signum*/) {
-  idle_running_.store(false, std::memory_order_relaxed);
-}
-
 Master::~Master() {
   idle_running_.store(false, std::memory_order_relaxed);
   if (idle_thread_.joinable()) {
@@ -223,12 +217,10 @@ void Master::wait() {
 
 void Master::run() {
   idle_running_.store(true, std::memory_order_relaxed);
-  signal(SIGINT, Master::handle_shutdown_signal);
-  signal(SIGTERM, Master::handle_shutdown_signal);
-
-  idle_thread_ = std::thread([]() {
-    while (idle_running_.load(std::memory_order_relaxed)) {
-      std::this_thread::sleep_for(std::chrono::seconds(5));
+  idle_thread_ = std::thread([this]() {
+    while (idle_running_.load(std::memory_order_relaxed) &&
+           !options_.shutdown_context().requested()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
   });
 }

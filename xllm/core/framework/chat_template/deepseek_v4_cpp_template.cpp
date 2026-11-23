@@ -19,7 +19,6 @@ limitations under the License.
 #include <absl/strings/str_replace.h>
 #include <glog/logging.h>
 
-#include <algorithm>
 #include <cstdint>
 #include <sstream>
 #include <stdexcept>
@@ -27,6 +26,8 @@ limitations under the License.
 #include <utility>
 #include <variant>
 #include <vector>
+
+#include "core/framework/chat_template/deepseek_message_utils.h"
 
 namespace xllm {
 namespace {
@@ -407,135 +408,6 @@ std::string render_tool_calls(const nlohmann::ordered_json& tool_calls) {
 // Preprocessing: merge tool messages
 // ============================================================
 
-nlohmann::ordered_json merge_tool_messages(nlohmann::ordered_json messages) {
-  nlohmann::ordered_json merged = nlohmann::json::array();
-  merged.get_ref<nlohmann::ordered_json::array_t&>().reserve(messages.size());
-
-  for (auto& msg : messages) {
-    std::string role = msg.value("role", "");
-
-    if (role == kRoleTool) {
-      nlohmann::ordered_json tool_block;
-      tool_block["type"] = "tool_result";
-      const auto tool_call_id = msg.find("tool_call_id");
-      tool_block["tool_use_id"] = tool_call_id == msg.end()
-                                      ? nlohmann::ordered_json("")
-                                      : std::move(*tool_call_id);
-      tool_block["content"] = std::move(msg["content"]);
-
-      if (!merged.empty() && merged.back().value("role", "") == kRoleUser &&
-          merged.back().contains("content_blocks")) {
-        merged.back()["content_blocks"].emplace_back(std::move(tool_block));
-      } else {
-        nlohmann::ordered_json new_msg;
-        new_msg["role"] = kRoleUser;
-        new_msg["content_blocks"] = nlohmann::ordered_json::array();
-        new_msg["content_blocks"].emplace_back(std::move(tool_block));
-        merged.emplace_back(std::move(new_msg));
-      }
-    } else if (role == kRoleUser) {
-      nlohmann::ordered_json text_block;
-      text_block["type"] = "text";
-      text_block["text"] = std::move(msg["content"]);
-
-      if (!merged.empty() && merged.back().value("role", "") == kRoleUser &&
-          merged.back().contains("content_blocks") &&
-          !merged.back().contains("task")) {
-        merged.back()["content_blocks"].emplace_back(std::move(text_block));
-      } else {
-        nlohmann::ordered_json new_msg;
-        new_msg["role"] = kRoleUser;
-        new_msg["content"] = text_block["text"];
-        new_msg["content_blocks"] = nlohmann::ordered_json::array();
-        new_msg["content_blocks"].emplace_back(std::move(text_block));
-        for (const auto& key : {"task", "wo_eos", "mask"}) {
-          if (msg.contains(key)) {
-            new_msg[key] = std::move(msg[key]);
-          }
-        }
-        merged.emplace_back(std::move(new_msg));
-      }
-    } else {
-      merged.emplace_back(std::move(msg));
-    }
-  }
-  return merged;
-}
-
-nlohmann::ordered_json sort_tool_results_by_call_order(
-    nlohmann::ordered_json messages) {
-  std::unordered_map<std::string, int32_t> last_tc_order;
-
-  for (auto& msg : messages) {
-    std::string role = msg.value("role", "");
-    if (role == kRoleAssistant && msg.contains("tool_calls") &&
-        msg["tool_calls"].is_array()) {
-      last_tc_order.clear();
-      last_tc_order.reserve(msg["tool_calls"].size());
-      int32_t idx = 0;
-      for (const auto& tc : msg["tool_calls"]) {
-        std::string tc_id;
-        if (tc.contains("id")) {
-          tc_id = tc.value("id", "");
-        } else if (tc.contains("function") && tc["function"].contains("id")) {
-          tc_id = tc["function"].value("id", "");
-        }
-        if (!tc_id.empty()) {
-          last_tc_order[std::move(tc_id)] = idx;
-        }
-        ++idx;
-      }
-    } else if (role == kRoleUser && msg.contains("content_blocks")) {
-      if (last_tc_order.empty()) {
-        continue;
-      }
-      auto& blocks = msg["content_blocks"];
-      int32_t tool_count = 0;
-      int32_t previous_order = -1;
-      bool strictly_ordered = true;
-      for (const auto& b : blocks) {
-        if (b.value("type", "") == "tool_result") {
-          ++tool_count;
-          const auto order_it = last_tc_order.find(b.value("tool_use_id", ""));
-          const int32_t order =
-              order_it != last_tc_order.end() ? order_it->second : 0;
-          strictly_ordered = strictly_ordered && previous_order < order;
-          previous_order = order;
-        }
-      }
-      // Equal ranks still use the existing sort, whose tie order is
-      // unspecified.
-      if (tool_count > 1 && !strictly_ordered) {
-        std::vector<nlohmann::ordered_json> tool_blocks;
-        tool_blocks.reserve(tool_count);
-        std::vector<size_t> tool_positions;
-        tool_positions.reserve(tool_count);
-        for (size_t block_idx = 0; block_idx < blocks.size(); ++block_idx) {
-          auto& b = blocks[block_idx];
-          if (b.value("type", "") == "tool_result") {
-            tool_positions.emplace_back(block_idx);
-            tool_blocks.emplace_back(std::move(b));
-          }
-        }
-        std::sort(tool_blocks.begin(),
-                  tool_blocks.end(),
-                  [&](const nlohmann::ordered_json& a,
-                      const nlohmann::ordered_json& b) {
-                    auto ia = last_tc_order.find(a.value("tool_use_id", ""));
-                    auto ib = last_tc_order.find(b.value("tool_use_id", ""));
-                    int32_t oa = ia != last_tc_order.end() ? ia->second : 0;
-                    int32_t ob = ib != last_tc_order.end() ? ib->second : 0;
-                    return oa < ob;
-                  });
-        for (size_t idx = 0; idx < tool_positions.size(); ++idx) {
-          blocks[tool_positions[idx]] = std::move(tool_blocks[idx]);
-        }
-      }
-    }
-  }
-  return messages;
-}
-
 // ============================================================
 // Drop Thinking
 // ============================================================
@@ -686,32 +558,7 @@ std::string render_message(const nlohmann::ordered_json& messages,
   } else if (role == kRoleUser) {
     prompt += kUserSpToken;
     if (msg.contains("content_blocks") && msg["content_blocks"].is_array()) {
-      bool first_part = true;
-      for (const auto& block : msg["content_blocks"]) {
-        std::string btype = block.value("type", "");
-        if (btype != "text" && btype != "tool_result") {
-          continue;
-        }
-        if (!first_part) {
-          prompt += "\n\n";
-        }
-        first_part = false;
-        if (btype == "text") {
-          const auto text = block.find("text");
-          if (text != block.end()) {
-            prompt += text->get_ref<const std::string&>();
-          }
-        } else {
-          const auto tool_content = block.find("content");
-          const std::string& tc =
-              tool_content == block.end()
-                  ? empty_content
-                  : tool_content->get_ref<const std::string&>();
-          prompt += "<tool_result>";
-          prompt += tc;
-          prompt += "</tool_result>";
-        }
-      }
+      deepseek_template::append_content_blocks(prompt, msg["content_blocks"]);
     } else {
       prompt += content;
     }
@@ -720,7 +567,7 @@ std::string render_message(const nlohmann::ordered_json& messages,
     prompt += content;
   } else if (role == kRoleTool) {
     LOG(FATAL) << "deepseek_v4 merges tool messages into user; please "
-                  "preprocess with merge_tool_messages()";
+                  "preprocess with deepseek_template::merge_tool_messages()";
   } else if (role == kRoleAssistant) {
     std::string tc_content;
 
@@ -824,8 +671,10 @@ std::optional<std::string> DeepseekV4CppTemplate::apply(
         resolve_reasoning_effort(get_reasoning_effort(chat_template_kwargs));
 
     // Preprocess: merge tool + sort
-    normalized = merge_tool_messages(std::move(normalized));
-    normalized = sort_tool_results_by_call_order(std::move(normalized));
+    normalized = deepseek_template::merge_tool_messages(std::move(normalized));
+    normalized = deepseek_template::sort_tool_results_by_call_order(
+        std::move(normalized),
+        deepseek_template::ToolResultOrder::UNKNOWN_AS_FIRST_CALL);
 
     // drop_thinking = last msg is user
     bool drop_thinking = false;

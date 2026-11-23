@@ -42,6 +42,7 @@ limitations under the License.
 #include "core/framework/config/parallel_config_validation.h"
 #include "core/framework/config/speculative_config.h"
 #include "core/framework/model_loader/hf_model_config.h"
+#include "core/framework/model_loader/model_load_context.h"
 #include "framework/chat_template/chat_template_factory.h"
 #include "framework/model/model_args.h"
 #include "framework/request/request.h"
@@ -122,7 +123,8 @@ LLMMaster::LLMMaster(const Options& options)
 
   runtime::Options engine_options;
   engine_options.eplb_controller_config(std::move(controller_config));
-  engine_options.model_path(options_.model_path())
+  engine_options.shutdown_context(options_.shutdown_context())
+      .model_path(options_.model_path())
       .model_id(options_.model_id())
       .model_impl(ModelConfig::get_instance().model_impl())
       .extension_impl(options_.extension_impl())
@@ -230,8 +232,12 @@ LLMMaster::LLMMaster(const Options& options)
             model_loader, num_layers, dp_size, tp_size, master_status);
       };
   auto initialize_engine = [this, &prepare_model](auto* engine) {
-    CHECK(
-        engine->init(master_status_, prepare_model, kv_transfer_coordinator_));
+    const bool initialized =
+        engine->init(master_status_, prepare_model, kv_transfer_coordinator_);
+    if (!initialized && options_.shutdown_context().requested()) {
+      throw ModelLoadCancelled();
+    }
+    CHECK(initialized);
     if (llm_engine_ != nullptr) {
       CHECK(
           model_residency_coordinator_->finish_initialization(master_status_));

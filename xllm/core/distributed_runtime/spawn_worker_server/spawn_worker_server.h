@@ -20,6 +20,7 @@ limitations under the License.
 #include <memory>
 #include <string>
 
+#include "core/common/shutdown_context.h"
 #include "core/common/types.h"
 
 namespace xllm {
@@ -66,15 +67,15 @@ class SpawnWorkerServer final {
                              bool enable_mtp_draft_body_tp1,
                              bool enable_probabilistic_draft,
                              const std::string& model_impl,
-                             const std::string& extension_impl);
+                             const std::string& extension_impl,
+                             ShutdownContext shutdown_context = {});
 
   ~SpawnWorkerServer();
 
   void run();
 
-  static void handle_signal(int signum);
-
  private:
+  ShutdownContext shutdown_context_;
   std::atomic<bool> done_{false};
   std::unique_ptr<WorkerServer> worker_server_;
 };

@@ -49,6 +49,8 @@ enum class BlockType : int8_t {
   EMBEDDING = 4,  // per-sequence spec-decode embedding-row slot, exported via
                   // get_embedding_block_id() (embedding_ids). Value kept at 4
                   // for proto BlockType wire compatibility.
+  C2 = 6,         // CSA2 compressed main KV and index K.
+  C1 = 7,         // CSA2 uncompressed main KV and index K.
   LINEAR = 5,     // per-sequence linear-state (GDN recurrent) live slot, drawn
                   // from LinearStateBlockManager; exported via
   // get_linear_block_id() (linear_state_ids). Also the cache group
@@ -58,8 +60,10 @@ enum class BlockType : int8_t {
 // Fixed column order of worker multi_block_tables. The exported tables must
 // follow this order so they line up with the worker-side DSA group_infos; it
 // must never depend on std::map iteration order or config traversal order.
-inline constexpr std::array<BlockType, 3> kMultiBlockExportOrder = {
+inline constexpr std::array<BlockType, 5> kMultiBlockExportOrder = {
     BlockType::SWA,
+    BlockType::C2,
+    BlockType::C1,
     BlockType::C4,
     BlockType::C128};
 
@@ -77,6 +81,8 @@ inline constexpr bool is_kv_split_cache_block_type(BlockType type) {
   switch (type) {
     case BlockType::KV:
     case BlockType::SWA:
+    case BlockType::C2:
+    case BlockType::C1:
     case BlockType::C4:
     case BlockType::C128:
       return true;
@@ -94,6 +100,10 @@ inline constexpr std::optional<BlockType> block_type_from_cache_group_id(
       return BlockType::KV;
     case cache_group_id(BlockType::SWA):
       return BlockType::SWA;
+    case cache_group_id(BlockType::C2):
+      return BlockType::C2;
+    case cache_group_id(BlockType::C1):
+      return BlockType::C1;
     case cache_group_id(BlockType::C4):
       return BlockType::C4;
     case cache_group_id(BlockType::C128):

@@ -36,12 +36,13 @@ limitations under the License.
 #include "llm/qwen3_5_mtp.h"                             // IWYU pragma: keep
 #include "llm/qwen3_moe.h"                               // IWYU pragma: keep
 #include "llm/qwen3_next.h"                              // IWYU pragma: keep
-#include "models/npu_model_metadata.h"                   // IWYU pragma: keep
-#include "vlm/deepseek_ocr.h"                            // IWYU pragma: keep
-#include "vlm/glm5_next_vlm.h"                           // IWYU pragma: keep
-#include "vlm/joyai_asr.h"                               // IWYU pragma: keep
-#include "vlm/qwen3_5.h"                                 // IWYU pragma: keep
-#include "vlm/qwen3_vl.h"                                // IWYU pragma: keep
+#include "models/llm/deepseek_v41.h"
+#include "models/npu_model_metadata.h"  // IWYU pragma: keep
+#include "vlm/deepseek_ocr.h"           // IWYU pragma: keep
+#include "vlm/glm5_next_vlm.h"          // IWYU pragma: keep
+#include "vlm/joyai_asr.h"              // IWYU pragma: keep
+#include "vlm/qwen3_5.h"                // IWYU pragma: keep
+#include "vlm/qwen3_vl.h"               // IWYU pragma: keep
 
 #elif defined(USE_MLU)
 #include "dit/pipelines/pipeline_flux.h"          // IWYU pragma: keep

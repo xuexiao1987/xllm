@@ -25,6 +25,7 @@ limitations under the License.
 
 #include "common/macros.h"
 #include "common/types.h"
+#include "core/common/shutdown_context.h"
 
 namespace xllm {
 
@@ -34,6 +35,8 @@ class Options {
   ~Options() = default;
 
   std::string to_string() const;
+
+  PROPERTY(ShutdownContext, shutdown_context);
 
   PROPERTY(std::string, model_path);
 

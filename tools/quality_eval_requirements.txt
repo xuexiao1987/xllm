@@ -1,0 +1,9 @@
+# Copyright 2026 The xLLM Authors. Licensed under the Apache License, Version 2.0.
+# Install in a dedicated client environment, not the NPU serving environment.
+lm-eval[api,ifeval]==0.4.13
+datasets==5.2.0
+numpy==2.5.5
+nltk==3.10.4
+langdetect==1.0.9
+regex==2026.11.19
+word2number==1.1

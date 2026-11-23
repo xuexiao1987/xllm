@@ -60,7 +60,7 @@ class BuildCommandsTest(unittest.TestCase):
         return command
 
     def _build_targets(self, command: Command) -> None:
-        command.build_cmake_targets(self.ext, [], ["--config", "Release", "-j8"], self.env, str(self.extdir), "xllm")
+        command.build_cmake_targets(self.ext, [], ["--config", "Release", "-j8"], self.env, str(self.extdir))
 
     def test_product_build_excludes_tests_and_shares_one_build_invocation(self) -> None:
         command = self._command(self.setup.ExtBuild)

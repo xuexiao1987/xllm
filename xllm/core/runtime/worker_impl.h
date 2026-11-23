@@ -26,6 +26,7 @@ limitations under the License.
 
 #include "common/types.h"
 #include "core/framework/allocator/virtual_memory/mapped_virtual_memory_region.h"
+#include "core/framework/model_loader/model_load_context.h"
 #include "core/kv_cache/layout/kv_cache_shape.h"
 #include "core/kv_cache/transfer/hierarchy_kv_cache_transfer.h"
 #include "core/kv_cache/transfer/kv_cache_store.h"
@@ -513,6 +514,7 @@ class WorkerImpl {
 
   // runtime options
   runtime::Options options_;
+  ModelLoadContext model_load_context_;
 
   // whether the worker is a driver, who takes care of the sampling
   bool driver_ = false;

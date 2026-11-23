@@ -141,6 +141,8 @@ _EXPORTS = {
         "sparse_flash_attention_lse_out",
     ),
     "dsa": (
+        "smla_va",
+        "smla_va_metadata",
         "compressor",
         "hc_post",
         "hc_pre",
@@ -237,6 +239,8 @@ __all__ = [
     "moe_gating_top_k_hash",
     "sparse_attn_sharedkv",
     "sparse_attn_sharedkv_metadata",
+    "smla_va",
+    "smla_va_metadata",
     "causal_conv1d_qkv_prefill",
     "causal_conv1d_update_v2",
     "fused_gdn_gating",

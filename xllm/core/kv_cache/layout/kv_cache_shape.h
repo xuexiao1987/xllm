@@ -94,6 +94,9 @@ class KVCacheShape final {
     return shape_kind_ == ShapeKind::GROUPED_POOL;
   }
 
+  // Group identity travels with pool counts, including across worker RPC.
+  bool has_pool(BlockType type) const;
+  int64_t pool_count(BlockType type) const;
   void print_shapes() const;
 
   void to_proto(proto::KVCacheShape* proto_shape) const;
@@ -134,6 +137,7 @@ class KVCacheShape final {
   KPoolCacheLayout kpool_layout_ = KPoolCacheLayout::PACKED;
   std::optional<std::vector<int64_t>> kpool_tail_shape_;
   ShapeKind shape_kind_ = ShapeKind::NORMAL;
+  std::vector<BlockType> pool_types_;
   std::optional<std::vector<int64_t>> key_cache_shape_;
   std::optional<std::vector<int64_t>> value_cache_shape_;
 

@@ -17,11 +17,14 @@ limitations under the License.
 
 #include <google/protobuf/service.h>
 
+#include <atomic>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 
 #include "core/common/macros.h"
+#include "core/common/shutdown_context.h"
 
 namespace brpc {
 class Server;
@@ -40,7 +43,8 @@ class XllmServer final {
   XllmServer();
   ~XllmServer();
 
-  bool start(std::unique_ptr<APIService> api_service);
+  bool start(std::unique_ptr<APIService> api_service,
+             const ShutdownContext& shutdown_context);
   bool start(std::unique_ptr<PDService> pd_service);
   bool start(std::shared_ptr<CollectiveService> service,
              const std::string& addr,
@@ -50,7 +54,7 @@ class XllmServer final {
              const std::string& addr,
              const std::string& server_name);
 
-  void run();
+  void run(const ShutdownContext& shutdown_context = {});
   void stop();
 
   bool has_initialized() const { return has_initialized_; }
@@ -66,6 +70,8 @@ class XllmServer final {
 
  private:
   bool has_initialized_ = false;
+  std::atomic<bool> stopping_{false};
+  std::once_flag stop_once_;
   int listen_port_ = -1;
   std::string listen_address_;
   std::weak_ptr<WorkerService> worker_service_;

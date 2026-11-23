@@ -66,9 +66,6 @@ limitations under the License.
 extern char** environ;
 
 namespace xllm {
-namespace {
-void handle_signal(int signum) { _exit(0); }
-}  // namespace
 
 void WorkerServer::create_server(const runtime::Options& options,
                                  std::atomic<bool>& done,
@@ -216,7 +213,7 @@ void WorkerServer::create_server(const runtime::Options& options,
   done.store(true);
 
   // Wait until Ctrl-C is pressed, then Stop() and Join() the server.
-  worker_server->run();
+  worker_server->run(options.shutdown_context());
 }
 
 void WorkerServer::stop() {
@@ -229,11 +226,13 @@ void WorkerServer::stop() {
   auto worker_server = registry.try_get_server(server_name_);
   if (worker_server != nullptr) {
     worker_server->stop();
-    registry.unregister_server(server_name_);
   }
 
   if (worker_thread_ && worker_thread_->joinable()) {
     worker_thread_->join();
+  }
+  if (worker_server != nullptr) {
+    registry.unregister_server(server_name_);
   }
 
   stop_spawn_worker();
@@ -462,10 +461,6 @@ WorkerServer::WorkerServer(int32_t local_worker_idx,
                           worker_type);
       return;
     } else {
-      // worker process should handle SIGTREM and SIGINT signals.
-      signal(SIGINT, handle_signal);
-      signal(SIGTERM, handle_signal);
-
       // start worker in a thread.
       worker_thread_ =
           std::make_unique<std::thread>(&WorkerServer::create_server,
