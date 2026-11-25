@@ -66,6 +66,8 @@ class KVCacheCapacity final {
   // DeepSeek V4 uses separate block pools for sliding-window and compressed
   // caches. These fields are only meaningful for deepseek_v4.
   PROPERTY(int64_t, swa_count) = 0;
+  PROPERTY(int64_t, c2_count) = 0;
+  PROPERTY(int64_t, c1_count) = 0;
   PROPERTY(int64_t, c4_count) = 0;
   PROPERTY(int64_t, c128_count) = 0;
 };

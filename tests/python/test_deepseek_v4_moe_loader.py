@@ -123,6 +123,8 @@ def test_moe_loader_uses_native_projection_names_and_local_expert_range() -> Non
         "model.layers.0.mlp.experts_w2": torch.nn.Parameter(torch.empty(0, dtype=torch.int8), requires_grad=False),
     }
     buffers = _moe_quant_buffers()
+    for name, tensor in {**parameters, **buffers}.items():
+        setattr(mlp, name.rsplit(".", 1)[-1], tensor)
     owner = SimpleNamespace(
         cfg=SimpleNamespace(moe_intermediate_size=4, hidden_size=3),
         model=SimpleNamespace(layers=[SimpleNamespace(mlp=mlp)]),
@@ -247,6 +249,8 @@ def test_load_weights_reaches_routed_expert_aliases(
         "model.layers.0.mlp.experts_w2": torch.nn.Parameter(torch.empty(0, dtype=torch.int8), requires_grad=False),
     }
     buffers = _moe_quant_buffers()
+    for name, tensor in {**parameters, **buffers}.items():
+        setattr(mlp, name.rsplit(".", 1)[-1], tensor)
     owner = SimpleNamespace(
         cfg=SimpleNamespace(
             tp_size=1,
@@ -300,6 +304,8 @@ def _minimal_moe_loader_state(tensors: dict[str, torch.Tensor]) -> tuple[SimpleN
         "model.layers.0.mlp.experts_w2": torch.nn.Parameter(torch.empty(0, dtype=torch.int8), requires_grad=False),
     }
     buffers = _moe_quant_buffers()
+    for name, tensor in {**parameters, **buffers}.items():
+        setattr(mlp, name.rsplit(".", 1)[-1], tensor)
     owner = SimpleNamespace(
         cfg=SimpleNamespace(moe_intermediate_size=4, hidden_size=4),
         model=SimpleNamespace(layers=[SimpleNamespace(mlp=mlp)]),
@@ -460,3 +466,62 @@ def test_moe_loader_preserves_legacy_shared_up_projection_scale() -> None:
         owner.get_buffer("model.layers.0.mlp.experts_w13_scale")[0],
         torch.tensor([[1.0], [2.0], [3.0], [4.0], [1.0], [2.0], [3.0], [4.0]]),
     )
+
+
+@pytest.mark.parametrize("module_name", ["ffn", "mlp"])
+@pytest.mark.parametrize("names", [("gate_proj", "up_proj", "down_proj"), ("w1", "w3", "w2")])
+def test_dense_loader_preserves_projection_shards_and_quantization(
+    module_name: str, names: tuple[str, str, str]
+) -> None:
+    prefix = f"layers.0.{module_name}."
+    tensors: dict[str, torch.Tensor] = {}
+    for index, name in enumerate(names):
+        for suffix in ("weight", "weight_scale", "weight_offset"):
+            shape = (4, 4) if suffix == "weight" else (4, 1)
+            tensors[prefix + name + "." + suffix] = (
+                torch.arange(16 if suffix == "weight" else 4).reshape(shape) + index * 20
+            )
+    copied: dict[str, torch.Tensor] = {}
+    processed: list[bool] = []
+    loader = SimpleNamespace(
+        has=tensors.__contains__,
+        get_tensor=tensors.__getitem__,
+        shard=lambda tensor, dim: tensor.chunk(2, dim=dim)[1].contiguous(),
+        copy_in=copied.__setitem__,
+    )
+    DeepseekV4ForCausalLM._load_dsv4_dense_mlp(
+        loader,
+        "layers.0.",
+        "model.layers.0.",
+        SimpleNamespace(process_weights_after_loading=lambda: processed.append(True)),
+    )
+    for suffix in ("weight", "weight_scale", "weight_offset"):
+        expected_up = torch.cat([tensors[prefix + name + "." + suffix][2:] for name in names[:2]])
+        expected_down = tensors[prefix + names[2] + "." + suffix]
+        if suffix == "weight":
+            expected_down = expected_down[:, 2:]
+        torch.testing.assert_close(copied["model.layers.0.mlp.gate_up_proj." + suffix], expected_up)
+        torch.testing.assert_close(copied["model.layers.0.mlp.down_proj." + suffix], expected_down)
+    assert processed == [True]
+
+
+def test_dense_loader_does_not_switch_aliases_when_selected_quantization_is_missing() -> None:
+    tensors = {"layers.0.ffn." + name + ".weight": torch.ones(4, 4) for name in ("w1", "w3", "w2")}
+    for name in ("gate_proj", "up_proj", "down_proj"):
+        for suffix in ("weight", "weight_scale", "weight_offset"):
+            tensors["layers.0.mlp." + name + "." + suffix] = torch.zeros(4, 4)
+    processed: list[bool] = []
+    loader = SimpleNamespace(
+        has=tensors.__contains__,
+        get_tensor=tensors.__getitem__,
+        shard=lambda tensor, dim: tensor,
+        copy_in=lambda name, tensor: None,
+    )
+    with pytest.raises(KeyError, match=r"layers\.0\.ffn\.w1\.weight_scale"):
+        DeepseekV4ForCausalLM._load_dsv4_dense_mlp(
+            loader,
+            "layers.0.",
+            "model.layers.0.",
+            SimpleNamespace(process_weights_after_loading=lambda: processed.append(True)),
+        )
+    assert not processed

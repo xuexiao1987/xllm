@@ -39,7 +39,6 @@ from xllm.python.model_executor.input_batch import (
     InputBatchMetadata,
 )
 from xllm.python.model_executor.runners.base import ModelExecutionOutput
-from xllm.python.model_executor.runners.decode_cuda_graph import DecodeCudaGraphRunner
 from xllm.python.model_executor.runners.eager import EagerRunner
 from xllm.python.model_platform_support import (
     is_deepseek_v4_model,
@@ -51,6 +50,7 @@ from xllm.python.registry import GLM5_NEXT_TARGET_FAMILY
 
 if TYPE_CHECKING:
     from xllm.python.model_executor.runners.decode_acl_graph import DecodeAclGraphRunner
+    from xllm.python.model_executor.runners.decode_cuda_graph import DecodeCudaGraphRunner
 
 # Backend strings that mean "no graph execution" (matched case-insensitively).
 _DISABLED_GRAPH_BACKENDS = ("", "off", "none", "0")
@@ -121,6 +121,10 @@ def _create_attention_backend(
 ) -> AttentionBackend:
     config = config or {}
     model_type = config.get("model_type", "")
+    if model_type in ("deepseek_v41", "deepseek_v41_text"):
+        from xllm.python.attention.csa2_backend import Csa2AttentionBackend
+
+        return Csa2AttentionBackend(first_attention.csa2_backend_config)
     if is_deepseek_v4_model(config) and current_platform.is_npu():
         from xllm.python.attention.dsa_attention import DsaAttentionBackend
 
@@ -405,6 +409,8 @@ class ModelExecutor:
         if graph_backend in _DISABLED_GRAPH_BACKENDS:
             pass
         elif graph_backend == "cudagraphs":
+            from xllm.python.model_executor.runners.decode_cuda_graph import DecodeCudaGraphRunner
+
             self.decode_graph_runner = DecodeCudaGraphRunner(
                 execution_model,
                 self.attention_backend,
@@ -523,6 +529,8 @@ class ModelExecutor:
         self.attention_backend.bind_kv_caches(layer_caches)
         self.eager_runner.bind_layer_caches(layer_caches)
         if self.decode_graph_runner is not None:
+            from xllm.python.model_executor.runners.decode_cuda_graph import DecodeCudaGraphRunner
+
             self.decode_graph_runner.bind_layer_caches(layer_caches)
             if isinstance(self.decode_graph_runner, DecodeCudaGraphRunner):
                 # Capture before prefill populates live KV state. CUDA decode

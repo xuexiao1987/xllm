@@ -710,6 +710,38 @@ void ensure_xllm_ops_registered() {
 // compiled only under USE_NPU (mutually exclusive with USE_CUDA).
 TORCH_LIBRARY(xllm_ops, m) {
   m.def(
+      "smla_va_metadata(int num_heads_q, int num_heads_kv, int head_dim, *, "
+      "Tensor? cu_seqlens_q=None, Tensor? cu_seqlens_ori_kv=None, Tensor? "
+      "cu_seqlens_cmp_kv=None, "
+      "Tensor? seqused_q=None, Tensor? seqused_ori_kv=None, Tensor? "
+      "seqused_cmp_kv=None, "
+      "Tensor? cmp_residual_kv=None, Tensor? ori_topk_length=None, Tensor? "
+      "cmp_topk_length=None, "
+      "int batch_size=0, int max_seqlen_q=0, int max_seqlen_ori_kv=0, int "
+      "max_seqlen_cmp_kv=0, "
+      "int ori_topk=0, int cmp_topk=0, int cmp_ratio=0, int ori_mask_mode=0, "
+      "int cmp_mask_mode=0, "
+      "int ori_win_left=-1, int ori_win_right=-1, str layout_q='BSND', str "
+      "layout_kv='BSND', "
+      "bool has_ori_kv=True, bool has_cmp_kv=True) -> Tensor");
+  m.def(
+      "smla_va(Tensor q, *, Tensor? ori_kv=None, Tensor? cmp_kv=None, "
+      "Tensor? ori_sparse_indices=None, Tensor? cmp_sparse_indices=None, "
+      "Tensor? ori_block_table=None, Tensor? cmp_block_table=None, "
+      "Tensor? cu_seqlens_q=None, Tensor? cu_seqlens_ori_kv=None, Tensor? "
+      "cu_seqlens_cmp_kv=None, "
+      "Tensor? seqused_q=None, Tensor? seqused_ori_kv=None, Tensor? "
+      "seqused_cmp_kv=None, "
+      "Tensor? cmp_residual_kv=None, Tensor? ori_topk_length=None, Tensor? "
+      "cmp_topk_length=None, "
+      "Tensor? sinks=None, Tensor? metadata=None, float softmax_scale=1.0, int "
+      "cmp_ratio=0, "
+      "int ori_mask_mode=0, int cmp_mask_mode=0, int ori_win_left=-1, int "
+      "ori_win_right=-1, "
+      "str layout_q='BSND', str layout_kv='BSND', int topk_value_mode=1, "
+      "bool return_softmax_lse=False) -> (Tensor, Tensor)");
+
+  m.def(
       "shared_linear_state_indices_out(Tensor ids, Tensor rows, Tensor(a!) "
       "out) -> ()");
   m.def(
@@ -972,6 +1004,13 @@ TORCH_LIBRARY(xllm_ops, m) {
   m.def(
       "hc_post(Tensor x, Tensor residual, Tensor post, Tensor comb) -> "
       "Tensor");
+  m.def(
+      "hc_pre_va(Tensor hidden, Tensor hc_fn, Tensor hc_scale, Tensor hc_base, "
+      "Tensor? pre_mix, int hc_mult, int hc_sinkhorn_iters, float norm_eps, "
+      "float hc_eps) -> (Tensor, Tensor, Tensor, Tensor)");
+  m.def(
+      "hc_post_va(Tensor x, Tensor residual, Tensor post, Tensor comb) -> "
+      "Tensor");
   // Compressor: NSA-style KV pooling. kv_state/score_state are in-place (Ref).
   // Returns (cmp_kv, wkv_proj, softmax_res, norm_x, norm_rstd).
   m.def(
@@ -1012,6 +1051,7 @@ TORCH_LIBRARY(xllm_ops, m) {
 }
 
 TORCH_LIBRARY_IMPL(xllm_ops, PrivateUse1, m) {
+  m.impl("smla_va", TORCH_FN(xllm::kernel::npu::smla_va));
   m.impl(
       "shared_linear_state_indices_out",
       TORCH_FN(xllm::kernel::npu::tilelang::shared_linear_state_indices_out));
@@ -1089,6 +1129,8 @@ TORCH_LIBRARY_IMPL(xllm_ops, PrivateUse1, m) {
          TORCH_FN(xllm::kernel::npu::dequant_swiglu_quant));
   m.impl("hc_pre", TORCH_FN(xllm::kernel::npu::hc_pre));
   m.impl("hc_post", TORCH_FN(xllm::kernel::npu::hc_post));
+  m.impl("hc_pre_va", TORCH_FN(xllm::kernel::npu::hc_pre_va));
+  m.impl("hc_post_va", TORCH_FN(xllm::kernel::npu::hc_post_va));
   m.impl("compressor", TORCH_FN(xllm::kernel::npu::compressor));
   m.impl("sparse_attn_sharedkv",
          TORCH_FN(xllm::kernel::npu::sparse_attn_sharedkv));
@@ -1111,6 +1153,7 @@ TORCH_LIBRARY_IMPL(xllm_ops, PrivateUse1, m) {
 // runs only on the eager prefill path, so it needs no fake/meta registration;
 // decode graph capture is phase-disjoint.
 TORCH_LIBRARY_IMPL(xllm_ops, CompositeExplicitAutograd, m) {
+  m.impl("smla_va_metadata", TORCH_FN(xllm::kernel::npu::smla_va_metadata));
   m.impl("has_moe_grouped_matmul_swiglu_quant",
          TORCH_FN(xllm::kernel::npu::has_moe_grouped_matmul_swiglu_quant));
   m.impl("has_moe_init_routing_v3",

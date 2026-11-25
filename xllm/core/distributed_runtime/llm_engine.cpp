@@ -409,7 +409,8 @@ bool LLMEngine::allocate_kv_cache(
     options.linear_state_num_slots(
         static_cast<int32_t>(kv_cache_cap.num_linear_state_blocks()));
   }
-  if (util::is_deepseek_v4_model_type(args_.model_type())) {
+  if (util::is_deepseek_v4_model_type(args_.model_type()) ||
+      args_.model_type() == "deepseek_v41") {
     constexpr uint32_t kManagerTypeBlockManagerImpl = 0;
     constexpr uint32_t kManagerTypeSlidingWindowBlockManager = 1;
 
@@ -418,6 +419,20 @@ bool LLMEngine::allocate_kv_cache(
         0};  // unused for sliding window manager
     std::vector<uint32_t> token_manager_ratios;
     token_manager_ratios.reserve(2);
+    if (args_.model_type() == "deepseek_v41") {
+      CHECK(!options_.enable_prefix_cache() && !options_.enable_disagg_pd() &&
+            !options_.enable_kvcache_store() &&
+            options_.host_blocks_factor() <= 1.0 &&
+            options_.num_speculative_tokens() == 0 &&
+            !options_.enable_schedule_overlap())
+          << "CSA2 initial text execution requires "
+             "Prefix/Host/Store/PD/speculation/Overlap disabled";
+      CHECK(!kv_cache_config.enable_vmm_kvcache())
+          << "CSA2 requires physical cache pools";
+      const auto& ratios = args_.csa2_manager_ratios();
+      CHECK(!ratios.empty() && ratios.front() == 0);
+      token_manager_ratios.assign(ratios.begin() + 1, ratios.end());
+    }
     for (const int32_t ratio : args_.compress_ratios()) {
       if (ratio == 4 || ratio == 128) {
         const uint32_t ratio_u32 = static_cast<uint32_t>(ratio);

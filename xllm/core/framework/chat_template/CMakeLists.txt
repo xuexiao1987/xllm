@@ -46,12 +46,40 @@ cc_library (
 
 cc_library (
   NAME
+    deepseek_message_utils
+  HDRS
+    deepseek_message_utils.h
+  SRCS
+    deepseek_message_utils.cpp
+  DEPS
+    nlohmann_json::nlohmann_json
+)
+
+cc_library (
+  NAME
     deepseek_v4_cpp_template
   HDRS
     deepseek_v4_cpp_template.h
   SRCS
     deepseek_v4_cpp_template.cpp
   DEPS
+    :deepseek_message_utils
+    :chat_template
+    :tokenizer
+    nlohmann_json::nlohmann_json
+    glog::glog
+    absl::strings
+)
+
+cc_library (
+  NAME
+    deepseek_v41_cpp_template
+  HDRS
+    deepseek_v41_cpp_template.h
+  SRCS
+    deepseek_v41_cpp_template.cpp
+  DEPS
+    :deepseek_message_utils
     :chat_template
     :tokenizer
     nlohmann_json::nlohmann_json
@@ -73,6 +101,7 @@ cc_library (
     :jinja_chat_template
     :deepseek_v32_cpp_template
     :deepseek_v4_cpp_template
+    :deepseek_v41_cpp_template
     nlohmann_json::nlohmann_json
     glog::glog
 )

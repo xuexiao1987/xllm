@@ -31,6 +31,7 @@ limitations under the License.
 #include "core/framework/config/speculative_config.h"
 #include "core/framework/model/model_type.h"
 #include "core/kv_cache/block/block_utils.h"
+#include "core/kv_cache/layout/csa2_cache_plan.h"
 #include "core/kv_cache/layout/deepseek_v4_cache_policy.h"
 #include "core/kv_cache/layout/kpool_cache_policy.h"
 #include "core/kv_cache/layout/kv_cache_shape.h"
@@ -431,6 +432,39 @@ Dsv4KVCacheEstimateCost estimate_dsv4_kv_cache_cost(
     cache_cost.manager_blocks_per_unit = 128;
   }
   return cache_cost;
+}
+
+void init_csa2_counts(const ModelArgs& args,
+                      const KVCacheEstimateOptions& options,
+                      KVCacheCapacity* capacity) {
+  CHECK(options.draft_model_args == nullptr)
+      << "CSA2 speculative state is not enabled";
+  const Csa2CachePlan plan(args.compress_ratios(), args.kv_source_layer_ids());
+  const int64_t block_size = options.block_size;
+  const int64_t dtype_bytes =
+      static_cast<int64_t>(torch::elementSize(options.dtype));
+  const int64_t sequences = std::max<int64_t>(options.max_seqs_per_batch, 1);
+  const int64_t swa_count =
+      get_swa_blocks_per_seq(args.window_size(), block_size) * sequences +
+      util::ceil_div(std::max<int64_t>(options.max_tokens_per_batch, 0),
+                     block_size) +
+      sequences + 2;
+  const int64_t fixed_bytes =
+      swa_count *
+      plan.swa_block_bytes(block_size, args.head_dim(), dtype_bytes);
+  CHECK_GT(capacity->cache_size_in_bytes(), fixed_bytes)
+      << "Insufficient CSA2 SWA/state memory";
+  const int64_t unit_bytes = plan.token_unit_bytes(
+      block_size, args.head_dim(), args.index_head_dim(), dtype_bytes);
+  CHECK_GT(unit_bytes, 0) << "CSA2 requires at least one Full source layer";
+  const int64_t units =
+      (capacity->cache_size_in_bytes() - fixed_bytes) / unit_bytes;
+  CHECK_GT(units, 0) << "Insufficient CSA2 main KV memory";
+  capacity->swa_count(swa_count)
+      .c2_count(plan.source_count(2) ? units : 0)
+      .c1_count(plan.source_count(1) ? 2 * units : 0)
+      .n_blocks(2 * units)
+      .slot_size(unit_bytes / (2 * block_size));
 }
 
 void init_dsv4_counts(const ModelArgs& model_args,
@@ -1139,7 +1173,9 @@ KVCacheCapacity estimate_kv_cache_capacity(
         kv_cache_cap.kpool_tail_len(), model_args.index_head_dim()));
   }
 
-  if (enable_dsv4_estimation) {
+  if (model_args.model_type() == "deepseek_v41") {
+    init_csa2_counts(model_args, options, &kv_cache_cap);
+  } else if (enable_dsv4_estimation) {
     init_dsv4_counts(model_args, options, &kv_cache_cap);
   } else {
     init_standard_counts(model_args, options, &kv_cache_cap);

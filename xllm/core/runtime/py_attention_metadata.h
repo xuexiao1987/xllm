@@ -76,6 +76,7 @@ class PyAttentionMetadataView final {
   const std::vector<int32_t>& kv_seq_lens_host_values() const;
   const std::vector<int32_t>& new_cache_slots_host_values() const;
   pybind11::object q_seq_lens_host() const;
+  pybind11::object engram_token_history() const;
   pybind11::list multi_block_tables() const;
   pybind11::object block_table() const;
   pybind11::object shared_full_block_table() const;
@@ -128,6 +129,7 @@ class PyAttentionMetadataView final {
   std::shared_ptr<layer::AttentionMetadata> metadata_;
   torch::Tensor kv_seq_lens_host_;
   torch::Tensor q_seq_lens_host_;
+  torch::Tensor engram_token_history_;
   std::vector<int32_t> new_cache_slots_host_values_;
   std::vector<torch::Tensor> multi_block_tables_;
   torch::Tensor shared_full_block_table_;

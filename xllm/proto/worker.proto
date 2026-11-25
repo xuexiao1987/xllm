@@ -55,6 +55,8 @@ message KVCacheShape {
   int64 shared_slab_count = 10;
   // Full-only draft layers backed by the target's static shared arena.
   int64 shared_draft_layers = 11;
+  // BlockType identities in the same order as grouped key_cache_shape counts.
+  repeated int32 pool_types = 12;
 }
 
 message AllocateKVCacheRequest {

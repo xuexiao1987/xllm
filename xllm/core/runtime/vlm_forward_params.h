@@ -302,6 +302,7 @@ inline LlmForwardInput make_llm_draft_input(const VlmForwardInput& target,
   params.embedding.embedding_ids = source.embedding.embedding_ids;
   params.embedding.request_ids = source.embedding.request_ids;
   params.embedding.extra_token_ids = source.embedding.extra_token_ids;
+  params.embedding.engram_token_history = source.embedding.engram_token_history;
   params.embedding.mtp_shifted_token_ids =
       source.embedding.mtp_shifted_token_ids;
   params.embedding.mtp_bootstrap_row_idxes =

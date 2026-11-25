@@ -33,7 +33,16 @@ try:
 except (AttributeError, RuntimeError):
     hc_post = None
 
+try:
+    hc_pre_va = torch.ops.xllm_ops.hc_pre_va
+    hc_post_va = torch.ops.xllm_ops.hc_post_va
+except (AttributeError, RuntimeError):
+    hc_pre_va = None
+    hc_post_va = None
+
 __all__ = [
     "hc_pre",
     "hc_post",
+    "hc_pre_va",
+    "hc_post_va",
 ]

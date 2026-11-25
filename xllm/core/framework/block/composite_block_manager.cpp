@@ -94,6 +94,8 @@ bool leaf_participates_in_prefix_cache(BlockType type,
   }
   switch (type) {
     case BlockType::KV:
+    case BlockType::C2:
+    case BlockType::C1:
     case BlockType::C4:
     case BlockType::C128:
       return true;
@@ -425,11 +427,14 @@ CompositeBlockManager::LeafMap build_composite_leaves(
                       compress_ratio);
       opts.num_blocks(static_cast<uint32_t>(options.num_blocks()) /
                       compress_ratio);
-      CHECK(compress_ratio == 4 || compress_ratio == 128)
+      CHECK(compress_ratio == 1 || compress_ratio == 2 || compress_ratio == 4 ||
+            compress_ratio == 128)
           << "unexpected compress_ratio " << compress_ratio
           << " for composite BlockManagerImpl sub-manager";
-      const BlockType key =
-          compress_ratio == 4 ? BlockType::C4 : BlockType::C128;
+      const BlockType key = compress_ratio == 1   ? BlockType::C1
+                            : compress_ratio == 2 ? BlockType::C2
+                            : compress_ratio == 4 ? BlockType::C4
+                                                  : BlockType::C128;
       const bool compressed_participates =
           key == BlockType::C4 ? c4_participates : c128_participates;
       const bool compressed_prefix_cache =

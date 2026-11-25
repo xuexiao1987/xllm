@@ -101,6 +101,8 @@ void register_attention_metadata_views(py::module_& module) {
           &PyAttentionMetadataView::new_cache_slots_host_values)
       .def_property_readonly("q_seq_lens_host",
                              &PyAttentionMetadataView::q_seq_lens_host)
+      .def_property_readonly("engram_token_history",
+                             &PyAttentionMetadataView::engram_token_history)
       .def_property_readonly("multi_block_tables",
                              &PyAttentionMetadataView::multi_block_tables)
       .def_property_readonly("block_table",
@@ -239,6 +241,7 @@ PyAttentionMetadataView::PyAttentionMetadataView(
   if (!params.multi_block_tables.empty()) {
     new_cache_slots_host_values_ = params.attention.host.new_cache_slots;
   }
+  engram_token_history_ = params.embedding.engram_token_history;
   multi_block_tables_ = params.multi_block_tables;
   shared_full_block_table_ = params.attention.device.shared_full_block_table;
   shared_full_slot_mapping_ = params.attention.device.shared_full_slot_mapping;
@@ -426,6 +429,10 @@ py::object PyAttentionMetadataView::q_seq_lens() const {
 
 py::object PyAttentionMetadataView::q_seq_lens_host() const {
   return optional_tensor(q_seq_lens_host_);
+}
+
+py::object PyAttentionMetadataView::engram_token_history() const {
+  return optional_tensor(engram_token_history_);
 }
 
 py::list PyAttentionMetadataView::multi_block_tables() const {

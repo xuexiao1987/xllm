@@ -357,6 +357,17 @@ class DeepseekV4Args final {
   PROPERTY(std::string, scale_fmt);
 };
 
+// CSA2 cache ownership and request-history geometry.
+class DeepseekV41Args final {
+ public:
+  REFLECT_PROPERTIES(DeepseekV41Args);
+  PROPERTY(std::vector<int32_t>, csa2_manager_ratios);
+  PROPERTY(std::vector<int32_t>, kv_source_layer_ids);
+  PROPERTY(std::vector<int32_t>, index_source_layer_ids);
+  PROPERTY(std::vector<int32_t>, engram_layer_ids);
+  PROPERTY(int32_t, engram_max_ngram_size) = 0;
+};
+
 // Hyperconnection topology and sinkhorn normalization configuration.
 class HyperconnectionArgs final {
  public:
@@ -854,6 +865,18 @@ struct ModelArgs {
   FORWARD_PROPERTY(bool, index_share_for_mtp_iteration, indexer_args);
   FORWARD_PROPERTY(std::vector<std::string>, indexer_types, indexer_args);
 
+  PROPERTY(DeepseekV41Args, deepseek_v41_args);
+  FORWARD_PROPERTY(std::vector<int32_t>,
+                   csa2_manager_ratios,
+                   deepseek_v41_args);
+  FORWARD_PROPERTY(std::vector<int32_t>,
+                   kv_source_layer_ids,
+                   deepseek_v41_args);
+  FORWARD_PROPERTY(std::vector<int32_t>,
+                   index_source_layer_ids,
+                   deepseek_v41_args);
+  FORWARD_PROPERTY(std::vector<int32_t>, engram_layer_ids, deepseek_v41_args);
+  FORWARD_PROPERTY(int32_t, engram_max_ngram_size, deepseek_v41_args);
   PROPERTY(DeepseekV4Args, deepseek_v4_args);
 
   FORWARD_PROPERTY(int32_t, rope_head_dim, deepseek_v4_args);

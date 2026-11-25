@@ -1,0 +1,839 @@
+/* Copyright 2026 The xLLM Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    https://github.com/xLLM-AI/xllm/blob/main/LICENSE
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
+#include "framework/chat_template/deepseek_v41_cpp_template.h"
+
+#include <absl/strings/str_join.h>
+#include <absl/strings/str_replace.h>
+#include <glog/logging.h>
+
+#include <cstdint>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "core/framework/chat_template/deepseek_message_utils.h"
+
+namespace xllm {
+namespace {
+
+// ============================================================
+// Special Tokens
+// ============================================================
+
+constexpr const char* kBosToken = "<｜begin▁of▁sentence｜>";
+constexpr const char* kEosToken = "<｜end▁of▁sentence｜>";
+constexpr const char* kThinkingStartToken = "<think>";
+constexpr const char* kThinkingEndToken = "</think>";
+constexpr const char* kDsmlToken = "｜DSML｜";
+
+constexpr const char* kUserSpToken = "<｜User｜>";
+constexpr const char* kAssistantSpToken = "<｜Assistant｜>";
+constexpr const char* kSystemSpToken = "<｜System｜>";
+constexpr const char* kLatestReminderSpToken = "<｜latest_reminder｜>";
+
+// V4.1 DSML tags carry a leading space (e.g. "<｜DSML｜ calls>").
+constexpr const char* kToolCallsBlockName = " calls";
+
+// Task special tokens
+const std::unordered_map<std::string, std::string>& task_sp_tokens() {
+  static const std::unordered_map<std::string, std::string> kMap = {
+      {"action", "<｜action｜>"},
+      {"query", "<｜query｜>"},
+      {"authority", "<｜authority｜>"},
+      {"domain", "<｜domain｜>"},
+      {"title", "<｜title｜>"},
+      {"read_url", "<｜read_url｜>"},
+  };
+  return kMap;
+}
+
+// ============================================================
+// Templates
+// ============================================================
+
+constexpr const char* kToolsTemplate =
+    "## Tools\n"
+    "\n"
+    "You have access to a set of tools to help "
+    "answer the user's question. You can invoke "
+    "tools by writing a "
+    "\"<{dsml_token} calls>\" block like the "
+    "following:\n"
+    "\n"
+    "<{dsml_token} calls>\n"
+    "<{dsml_token} invoke name=\"$TOOL_NAME\">\n"
+    "<{dsml_token} parameter "
+    "name=\"$PARAMETER_NAME\" "
+    "string=\"true|false\">"
+    "$PARAMETER_VALUE"
+    "</{dsml_token} parameter>\n"
+    "...\n"
+    "</{dsml_token} invoke>\n"
+    "<{dsml_token} invoke name=\"$TOOL_NAME2\">\n"
+    "...\n"
+    "</{dsml_token} invoke>\n"
+    "</{dsml_token} calls>\n"
+    "\n"
+    "String parameters should be specified as is "
+    "and set `string=\"true\"`. For all other types "
+    "(numbers, booleans, arrays, objects), pass the "
+    "value in JSON format and set "
+    "`string=\"false\"`.\n"
+    "\n"
+    "If thinking_mode is enabled (triggered by "
+    "{thinking_start_token}), you MUST output your "
+    "complete reasoning inside "
+    "{thinking_start_token}..."
+    "{thinking_end_token} BEFORE any tool calls or "
+    "final response.\n"
+    "\n"
+    "Otherwise, output directly after "
+    "{thinking_end_token} with tool calls or final "
+    "response.\n"
+    "\n"
+    "### Available Tool Schemas\n"
+    "\n"
+    "{tool_schemas}\n"
+    "\n"
+    "You MUST strictly follow the above defined "
+    "tool name and parameter schemas to invoke "
+    "tool calls.\n";
+
+constexpr const char* kResponseFormatTemplate =
+    "## Response Format:\n\n"
+    "You MUST strictly adhere to the following "
+    "schema to reply:\n{schema}";
+
+constexpr const char* kToolCallTemplate =
+    "<{dsml_token} invoke name=\"{name}\">\n"
+    "{arguments}\n"
+    "</{dsml_token} invoke>";
+
+// V4.1 renders reasoning effort as a numeric budget on a 1-100 scale, unlike
+// V4's long prose prompts.
+constexpr const char* kReasoningEffortTemplate =
+    "Reasoning Effort: {budget} "
+    "(range 1-100, the higher the value, the more thorough the reasoning)\n\n";
+
+// Reasoning effort tiers understood by the prompt encoder. Request-level values
+// are collapsed onto these by resolve_reasoning_effort().
+constexpr char kReasoningEffortNone[] = "none";
+constexpr char kThinkingModeThinking[] = "thinking";
+constexpr char kThinkingModeChat[] = "chat";
+constexpr char kDeepseekV41ImagePlaceholder[] = "<｜deepseek_image｜>";
+constexpr char kDeepseekV41ImageAlias[] = "<image>";
+constexpr char kDeepseekV41ImageAliasEscape[] = "\\<image>";
+constexpr char kDeepseekV41ImageLiteralSentinel[] =
+    "\x1F"
+    "deepseek_v41_literal_image"
+    "\x1F";
+
+constexpr const char* kRoleSystem = "system";
+constexpr const char* kRoleDeveloper = "developer";
+constexpr const char* kRoleUser = "user";
+constexpr const char* kRoleTool = "tool";
+constexpr const char* kRoleAssistant = "assistant";
+constexpr const char* kRoleLatestReminder = "latest_reminder";
+constexpr const char* kRoleDirectSearchResults = "direct_search_results";
+
+// ============================================================
+// Utility Functions
+// ============================================================
+
+std::string to_json(const nlohmann::ordered_json& value) {
+  return value.dump(/*indent=*/-1,
+                    /*indent_char=*/' ',
+                    /*ensure_ascii=*/false,
+                    nlohmann::json::error_handler_t::replace);
+}
+
+// Lenient contract: never throws on malformed input; valid non-object JSON
+// collapses to an empty object and unparsable text is kept as
+// {"arguments": <text>}.
+// Parity with the upstream V4 official template's parse_json_object_or_empty
+// (identical implementation): dropping the arguments of a valid non-object
+// JSON value is the intended lenient behavior -- the model's own tool calls
+// always serialize object arguments -- not a silent-loss bug.
+nlohmann::ordered_json parse_json_object_or_empty(const std::string& text) {
+  if (text.empty()) {
+    return nlohmann::ordered_json::object();
+  }
+  try {
+    nlohmann::ordered_json parsed = nlohmann::json::parse(text);
+    if (parsed.is_object()) {
+      return parsed;
+    }
+    return nlohmann::ordered_json::object();
+  } catch (const nlohmann::json::parse_error&) {
+    nlohmann::ordered_json fallback = nlohmann::ordered_json::object();
+    fallback["arguments"] = text;
+    return fallback;
+  }
+}
+
+std::string resolve_thinking_mode(const nlohmann::ordered_json& kwargs) {
+  const auto mode = kwargs.find("thinking_mode");
+  if (mode != kwargs.end() && mode->is_string()) {
+    return mode->get<std::string>();
+  }
+
+  const auto effort = kwargs.find("reasoning_effort");
+  if (effort != kwargs.end() && effort->is_string() &&
+      effort->get<std::string>() == kReasoningEffortNone) {
+    return kThinkingModeChat;
+  }
+
+  const auto thinking = kwargs.find("thinking");
+  if (thinking != kwargs.end() && thinking->is_boolean()) {
+    return thinking->get<bool>() ? kThinkingModeThinking : kThinkingModeChat;
+  }
+  const auto enable_thinking = kwargs.find("enable_thinking");
+  if (enable_thinking != kwargs.end() && enable_thinking->is_boolean()) {
+    return enable_thinking->get<bool>() ? kThinkingModeThinking
+                                        : kThinkingModeChat;
+  }
+  return kThinkingModeThinking;
+}
+
+std::string get_reasoning_effort(const nlohmann::ordered_json& kwargs) {
+  if (kwargs.contains("reasoning_effort") &&
+      kwargs["reasoning_effort"].is_string()) {
+    return kwargs["reasoning_effort"].get<std::string>();
+  }
+  return "";
+}
+
+// Numeric budgets (on the 1-100 scale) for the named effort tiers.
+constexpr const char* kEffortWeightLow = "25";
+constexpr const char* kEffortWeightHigh = "50";
+constexpr const char* kEffortWeightXHigh = "75";
+constexpr const char* kEffortWeightMax = "100";
+
+// Collapse a request-level reasoning effort onto the numeric budget the V4.1
+// prompt encoder understands (1-100 scale):
+//   "none"                         -> "" (also forces chat mode)
+//   "low" -> 25, "high" -> 50, "xhigh" -> 75, "max" -> 100
+//   absent -> 50; unrecognized non-empty values -> 50 with a one-shot
+//   LOG_FIRST_N(WARNING) (per process, capping per-request log spam)
+// A raw integer string within [1, 100] is passed through unchanged.
+std::string resolve_reasoning_effort(const std::string& reasoning_effort) {
+  if (reasoning_effort == kReasoningEffortNone) {
+    return "";
+  }
+  if (reasoning_effort == "low") {
+    return kEffortWeightLow;
+  }
+  if (reasoning_effort == "high") {
+    return kEffortWeightHigh;
+  }
+  if (reasoning_effort == "xhigh") {
+    return kEffortWeightXHigh;
+  }
+  if (reasoning_effort == "max") {
+    return kEffortWeightMax;
+  }
+  if (!reasoning_effort.empty()) {
+    size_t consumed = 0;
+    try {
+      int32_t budget = std::stoi(reasoning_effort, &consumed);
+      if (consumed == reasoning_effort.size() && budget >= 1 && budget <= 100) {
+        return std::to_string(budget);
+      }
+    } catch (const std::invalid_argument&) {
+      // Named or malformed budgets use the documented default.
+    } catch (const std::out_of_range&) {
+      // Numeric budgets outside the parser range use the same default.
+    }
+    LOG_FIRST_N(WARNING, 1)
+        << "Unrecognized reasoning effort \"" << reasoning_effort
+        << "\"; falling back to " << kEffortWeightHigh;
+  }
+  return kEffortWeightHigh;
+}
+
+// Prefix for an already-resolved numeric budget. An empty budget renders
+// nothing (chat mode or "none" effort).
+std::string reasoning_effort_prompt_v41(const std::string& resolved_effort) {
+  if (resolved_effort.empty()) {
+    return "";
+  }
+  return absl::StrReplaceAll(std::string(kReasoningEffortTemplate),
+                             {{"{budget}", resolved_effort}});
+}
+
+std::vector<nlohmann::ordered_json> tool_calls_from_openai_format(
+    const Message::ToolCallVec& tool_calls) {
+  std::vector<nlohmann::ordered_json> out;
+  out.reserve(tool_calls.size());
+  for (const Message::ToolCall& tc : tool_calls) {
+    nlohmann::ordered_json item;
+    item["id"] = tc.id;
+    item["name"] = tc.function.name;
+    item["arguments"] = parse_json_object_or_empty(tc.function.arguments);
+    out.emplace_back(std::move(item));
+  }
+  return out;
+}
+
+// Parity with upstream V4's encode_arguments_to_dsml: parameter values are
+// attribute-delimited by the closing parameter tag, never escaped.
+std::string encode_arguments_to_dsml(const nlohmann::ordered_json& tool_call) {
+  std::ostringstream oss;
+  nlohmann::ordered_json arguments = nlohmann::json::object();
+  if (tool_call.contains("arguments")) {
+    arguments = tool_call["arguments"];
+    if (arguments.is_string()) {
+      arguments = parse_json_object_or_empty(arguments.get<std::string>());
+    }
+  }
+  bool first = true;
+  for (auto it = arguments.begin(); it != arguments.end(); ++it) {
+    if (!first) {
+      oss << "\n";
+    }
+    first = false;
+    const nlohmann::ordered_json& value = it.value();
+    bool is_string = value.is_string();
+    oss << "<" << kDsmlToken << " parameter name=\"" << it.key()
+        << "\" string=\"" << (is_string ? "true" : "false") << "\">";
+    if (is_string) {
+      oss << value.get<std::string>();
+    } else {
+      oss << to_json(value);
+    }
+    oss << "</" << kDsmlToken << " parameter>";
+  }
+  return oss.str();
+}
+
+// Returns the index of the last user/developer message (a mid-conversation
+// system message also counts as an anchor), or -1 when the conversation has
+// no anchor at all. The -1 sentinel is meaningful to the consumers: in
+// drop_thinking_messages every index then satisfies idx >= last_user_idx,
+// which keeps the whole conversation -- see the fallback note there.
+int32_t find_last_user_index(const nlohmann::ordered_json& messages) {
+  for (int32_t idx = static_cast<int32_t>(messages.size()) - 1; idx >= 0;
+       --idx) {
+    std::string role = messages[idx].value("role", "");
+    if (role == kRoleUser || role == kRoleDeveloper ||
+        (role == kRoleSystem && idx > 0)) {
+      return idx;
+    }
+  }
+  return -1;
+}
+
+// `count_image_placeholders` advances its search cursor by
+// `sizeof(marker) - 1`; an empty marker would make that step 0 and spin
+// forever, so pin the non-empty invariant of both literals at compile time.
+static_assert(sizeof(kDeepseekV41ImageAlias) > 1,
+              "DeepSeek-V4.1 image alias must be non-empty");
+static_assert(sizeof(kDeepseekV41ImagePlaceholder) > 1,
+              "DeepSeek-V4.1 image placeholder must be non-empty");
+
+// Replace an escaped alias (`\<image>`) with the internal sentinel before
+// counting/rendering. The sentinel is not an image marker, so escaped text is
+// treated as plain text and is restored by the prompt processor after image
+// expansion.
+std::string protect_image_literals(const std::string& text) {
+  return absl::StrReplaceAll(
+      text, {{kDeepseekV41ImageAliasEscape, kDeepseekV41ImageLiteralSentinel}});
+}
+
+std::string restore_image_literals(const std::string& text) {
+  return absl::StrReplaceAll(
+      text, {{kDeepseekV41ImageLiteralSentinel, kDeepseekV41ImageAlias}});
+}
+
+// True when any message carries an image part. The escaped marker must stay
+// protected until the prompt processor runs whenever an image may expand it;
+// for a text-only request the template restores it directly.
+bool has_image_content(const ChatMessages& messages) {
+  for (const Message& message : messages) {
+    if (!std::holds_alternative<MMContentVec>(message.content)) {
+      continue;
+    }
+    for (const auto& item : std::get<MMContentVec>(message.content)) {
+      if (item.type == "image_url") {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Number of image placeholders the text already provides, counting both the
+// "<image>" alias and the native placeholder. The prompt processor expands both
+// forms, so a single text run may cover several images.
+size_t count_image_placeholders(const std::string& text) {
+  size_t count = 0;
+  for (size_t pos = text.find(kDeepseekV41ImageAlias); pos != std::string::npos;
+       pos = text.find(kDeepseekV41ImageAlias,
+                       pos + sizeof(kDeepseekV41ImageAlias) - 1)) {
+    ++count;
+  }
+  for (size_t pos = text.find(kDeepseekV41ImagePlaceholder);
+       pos != std::string::npos;
+       pos = text.find(kDeepseekV41ImagePlaceholder,
+                       pos + sizeof(kDeepseekV41ImagePlaceholder) - 1)) {
+    ++count;
+  }
+  return count;
+}
+
+std::string get_text_content(const Message::Content& content) {
+  if (std::holds_alternative<std::string>(content)) {
+    // A different message may still carry the image that expands this alias, so
+    // keep the escape protected until the prompt processor has run.
+    return protect_image_literals(std::get<std::string>(content));
+  }
+  // Multimodal content: render in content order with exactly one placeholder
+  // per collected image. Two marker conventions are accepted:
+  //  * The text carries explicit markers (e.g. "<image>", as most vision
+  //    harnesses emit). The processor matches placeholders to images in
+  //    document order, so those markers cover the first N images.
+  //  * A backslash-escaped marker (`\<image>`) is literal text: it is protected
+  //    with an internal sentinel before counting and is restored by the prompt
+  //    processor after image expansion.
+  //  * Any image not covered by a text marker gets one injected native
+  //    placeholder, or it would be silently dropped.
+  // Keying off the marker *count* (not a have-any-marker boolean) keeps the
+  // emitted placeholder count equal to the image count for content-only,
+  // marker-only, and mixed content alike: e.g. one "<image>" plus two
+  // image_urls now yields two placeholders. The previous all-or-nothing switch
+  // under-counted mixed content, and the multimodal executor rejected the
+  // request (image rows != placeholder slots). Surplus markers (more text
+  // markers than images) are stripped by the prompt processor.
+  // Video/audio parts have no DeepSeek-V4 model support yet and contribute no
+  // text (there is no processor placeholder they could match).
+  const auto& items = std::get<MMContentVec>(content);
+  size_t marker_count = 0;
+  for (const auto& item : items) {
+    if (item.type == "text") {
+      marker_count +=
+          count_image_placeholders(protect_image_literals(item.text));
+    }
+  }
+  std::string text;
+  size_t image_index = 0;
+  for (const auto& item : items) {
+    if (item.type == "text") {
+      text += protect_image_literals(item.text);
+    } else if (item.type == "image_url") {
+      // Text markers cover the first `marker_count` images in document order;
+      // inject a native placeholder only for the remaining ones.
+      if (image_index >= marker_count) {
+        text += kDeepseekV41ImagePlaceholder;
+      }
+      ++image_index;
+    }
+  }
+  return text;
+}
+
+// ============================================================
+// Tool Rendering
+// ============================================================
+
+std::string render_tools(const nlohmann::ordered_json& tools) {
+  std::vector<std::string> schemas;
+  schemas.reserve(tools.size());
+  for (const nlohmann::ordered_json& tool : tools) {
+    schemas.emplace_back(to_json(tool));
+  }
+  return absl::StrReplaceAll(std::string(kToolsTemplate),
+                             {{"{tool_schemas}", absl::StrJoin(schemas, "\n")},
+                              {"{dsml_token}", kDsmlToken},
+                              {"{thinking_start_token}", kThinkingStartToken},
+                              {"{thinking_end_token}", kThinkingEndToken}});
+}
+
+std::string render_tool_calls(
+    const std::vector<nlohmann::ordered_json>& tool_calls) {
+  if (tool_calls.empty()) {
+    return "";
+  }
+  std::vector<std::string> chunks;
+  chunks.reserve(tool_calls.size());
+  for (const nlohmann::ordered_json& tc : tool_calls) {
+    std::string invoke =
+        absl::StrReplaceAll(std::string(kToolCallTemplate),
+                            {{"{dsml_token}", kDsmlToken},
+                             {"{name}", tc.value("name", "")},
+                             {"{arguments}", encode_arguments_to_dsml(tc)}});
+    chunks.emplace_back(std::move(invoke));
+  }
+  std::string block = std::string("<") + kDsmlToken + kToolCallsBlockName +
+                      ">\n" + absl::StrJoin(chunks, "\n") + "\n</" +
+                      kDsmlToken + kToolCallsBlockName + ">";
+  return "\n\n" + block;
+}
+
+// ============================================================
+// Preprocessing: merge tool messages
+// ============================================================
+
+// ============================================================
+// Drop Thinking
+// ============================================================
+
+// Safe-fallback semantics: with no user/developer message in the
+// conversation, last_user_idx is -1 and every index satisfies
+// idx >= last_user_idx, so nothing is dropped (kept verbatim). That is the
+// intended fallback, not a missed edge case: without an anchor there is no
+// way to tell which assistant blocks belong to the live round, so prefer
+// keeping messages over risking a wrong deletion.
+nlohmann::ordered_json drop_thinking_messages(
+    const nlohmann::ordered_json& messages) {
+  int32_t last_user_idx = find_last_user_index(messages);
+  nlohmann::ordered_json result = nlohmann::json::array();
+
+  for (int32_t idx = 0; idx < static_cast<int32_t>(messages.size()); ++idx) {
+    std::string role = messages[idx].value("role", "");
+    if (role == kRoleUser || role == kRoleSystem || role == kRoleTool ||
+        role == kRoleLatestReminder || role == kRoleDirectSearchResults ||
+        idx >= last_user_idx) {
+      result.emplace_back(messages[idx]);
+    } else if (role == kRoleAssistant) {
+      nlohmann::ordered_json copied = messages[idx];
+      copied.erase("reasoning");
+      result.emplace_back(std::move(copied));
+    }
+    // developer before last_user_idx is dropped
+  }
+  return result;
+}
+
+// ============================================================
+// Message Rendering
+// ============================================================
+
+nlohmann::ordered_json normalize_messages(
+    const ChatMessages& messages,
+    const std::vector<xllm::JsonTool>& tools) {
+  nlohmann::ordered_json out = nlohmann::json::array();
+  for (const Message& message : messages) {
+    nlohmann::ordered_json item;
+    item["role"] = message.role;
+    item["content"] = get_text_content(message.content);
+    if (message.reasoning_content.has_value()) {
+      item["reasoning"] = message.reasoning_content.value();
+    }
+    if (message.tool_calls.has_value()) {
+      item["tool_calls"] =
+          tool_calls_from_openai_format(message.tool_calls.value());
+    }
+    if (message.tool_call_id.has_value()) {
+      item["tool_call_id"] = message.tool_call_id.value();
+    }
+    out.emplace_back(std::move(item));
+  }
+  if (!tools.empty()) {
+    nlohmann::ordered_json tools_json = nlohmann::json::array();
+    for (const xllm::JsonTool& tool : tools) {
+      nlohmann::ordered_json openai_tool;
+      openai_tool["type"] = "function";
+      nlohmann::ordered_json function;
+      function["name"] = tool.function.name;
+      function["description"] = tool.function.description;
+      function["parameters"] = tool.function.parameters;
+      openai_tool["function"] = std::move(function);
+      tools_json.emplace_back(std::move(openai_tool));
+    }
+    nlohmann::ordered_json sys_msg;
+    sys_msg["role"] = kRoleSystem;
+    sys_msg["tools"] = std::move(tools_json);
+    out.insert(out.begin(), std::move(sys_msg));
+  }
+  return out;
+}
+
+std::string render_message(const nlohmann::ordered_json& messages,
+                           int32_t index,
+                           const std::string& thinking_mode,
+                           bool drop_thinking,
+                           const std::string& reasoning_effort) {
+  if (index < 0 || index >= static_cast<int32_t>(messages.size())) {
+    LOG(FATAL) << "Message index out of range";
+  }
+
+  std::string prompt;
+  const nlohmann::ordered_json& msg = messages[index];
+  int32_t last_user_idx = find_last_user_index(messages);
+  std::string role = msg.value("role", "");
+  std::string content = msg.value("content", "");
+
+  nlohmann::ordered_json tools = nlohmann::json::array();
+  if (msg.contains("tools")) {
+    tools = msg["tools"];
+  }
+  nlohmann::ordered_json response_format;
+  if (msg.contains("response_format")) {
+    response_format = msg["response_format"];
+  }
+
+  // Reasoning effort prefix at index 0. reasoning_effort is already collapsed
+  // to a numeric budget by resolve_reasoning_effort().
+  std::string reasoning_effort_prompt;
+  if (index == 0 && thinking_mode == kThinkingModeThinking) {
+    reasoning_effort_prompt = reasoning_effort_prompt_v41(reasoning_effort);
+  }
+  // The system token leads the conversation when there is a reasoning effort
+  // prompt or the first message is a system message.
+  // Contract (checked against the upstream V4 official template): the effort
+  // budget is a system-scoped prefix, so the system token opens the
+  // conversation even when the first message is a user message, and the user
+  // token follows the budget text. The adjacent system + user tokens are the
+  // intended layout, not an accidental merge.
+  if (index == 0 && (!reasoning_effort_prompt.empty() || role == kRoleSystem)) {
+    prompt += kSystemSpToken;
+  }
+  prompt += reasoning_effort_prompt;
+
+  if (role == kRoleSystem) {
+    if (index > 0) {
+      // Mid-conversation system message.
+      prompt += kSystemSpToken;
+    }
+    prompt += content.empty() ? "" : content;
+    if (tools.is_array() && !tools.empty()) {
+      nlohmann::ordered_json fn_tools = nlohmann::json::array();
+      for (const auto& t : tools) {
+        if (t.contains("function")) {
+          fn_tools.emplace_back(t["function"]);
+        }
+      }
+      prompt += "\n\n" + render_tools(fn_tools);
+    }
+    if (!response_format.is_null()) {
+      prompt += "\n\n" +
+                absl::StrReplaceAll(std::string(kResponseFormatTemplate),
+                                    {{"{schema}", to_json(response_format)}});
+    }
+  } else if (role == kRoleDeveloper) {
+    if (content.empty()) {
+      LOG(FATAL) << "Developer message content is empty";
+    }
+    std::string dev_content = std::string(kUserSpToken) + content;
+    if (tools.is_array() && !tools.empty()) {
+      nlohmann::ordered_json fn_tools = nlohmann::json::array();
+      for (const auto& t : tools) {
+        if (t.contains("function")) {
+          fn_tools.emplace_back(t["function"]);
+        }
+      }
+      dev_content += "\n\n" + render_tools(fn_tools);
+    }
+    if (!response_format.is_null()) {
+      dev_content += "\n\n" + absl::StrReplaceAll(
+                                  std::string(kResponseFormatTemplate),
+                                  {{"{schema}", to_json(response_format)}});
+    }
+    prompt += dev_content;
+  } else if (role == kRoleUser) {
+    prompt += kUserSpToken;
+    if (msg.contains("content_blocks") && msg["content_blocks"].is_array()) {
+      deepseek_template::append_content_blocks(prompt, msg["content_blocks"]);
+    } else {
+      prompt += content.empty() ? "" : content;
+    }
+  } else if (role == kRoleLatestReminder) {
+    prompt += std::string(kLatestReminderSpToken) + content;
+  } else if (role == kRoleTool) {
+    LOG(FATAL) << "deepseek_v41 merges tool messages into user; please "
+                  "preprocess with deepseek_template::merge_tool_messages()";
+  } else if (role == kRoleAssistant) {
+    std::string thinking_part;
+    std::string tc_content;
+
+    std::vector<nlohmann::ordered_json> tcs;
+    if (msg.contains("tool_calls") && msg["tool_calls"].is_array()) {
+      tcs.reserve(msg["tool_calls"].size());
+      for (const auto& tc : msg["tool_calls"]) {
+        tcs.emplace_back(tc);
+      }
+    }
+    if (!tcs.empty()) {
+      tc_content = render_tool_calls(tcs);
+    }
+
+    std::string summary_content = content;
+    std::string reasoning = msg.value("reasoning", "");
+
+    bool prev_has_task = index - 1 >= 0 && messages[index - 1].contains("task");
+
+    if (thinking_mode == kThinkingModeThinking && !prev_has_task) {
+      if (!drop_thinking || index > last_user_idx) {
+        thinking_part = reasoning + kThinkingEndToken;
+      }
+    }
+
+    bool wo_eos = msg.contains("wo_eos") && msg["wo_eos"].is_boolean() &&
+                  msg["wo_eos"].get<bool>();
+    if (wo_eos) {
+      prompt += thinking_part + summary_content + tc_content;
+    } else {
+      prompt += thinking_part + summary_content + tc_content + kEosToken;
+    }
+  } else {
+    LOG(FATAL) << "Unknown role: " + role;
+  }
+
+  // Transition: append Assistant + thinking token
+  if (index + 1 < static_cast<int32_t>(messages.size()) &&
+      messages[index + 1].value("role", "") != kRoleAssistant &&
+      messages[index + 1].value("role", "") != kRoleLatestReminder) {
+    return prompt;
+  }
+
+  std::string task;
+  if (msg.contains("task") && msg["task"].is_string()) {
+    task = msg["task"].get<std::string>();
+  }
+
+  if (!task.empty()) {
+    auto it = task_sp_tokens().find(task);
+    if (it == task_sp_tokens().end()) {
+      LOG(FATAL) << "Invalid task: " + task;
+    }
+    if (task != "action") {
+      prompt += it->second;
+    } else {
+      prompt += kAssistantSpToken;
+      prompt += (thinking_mode != kThinkingModeThinking) ? kThinkingEndToken
+                                                         : kThinkingStartToken;
+      prompt += it->second;
+    }
+  } else if (role == kRoleUser || role == kRoleDeveloper ||
+             (role == kRoleSystem && index > 0)) {
+    // Parity with the upstream V4 official template: generation starts
+    // directly from the leading system block, so a system message at index 0
+    // deliberately closes without the assistant token; only mid-conversation
+    // system blocks continue with it (the index > 0 guard above).
+    prompt += kAssistantSpToken;
+    if (!drop_thinking && thinking_mode == kThinkingModeThinking) {
+      prompt += kThinkingStartToken;
+    } else if (drop_thinking && thinking_mode == kThinkingModeThinking &&
+               index >= last_user_idx) {
+      prompt += kThinkingStartToken;
+    } else {
+      prompt += kThinkingEndToken;
+    }
+  }
+
+  return prompt;
+}
+
+}  // namespace
+
+// ============================================================
+// Public Interface
+// ============================================================
+
+DeepseekV41CppTemplate::DeepseekV41CppTemplate(const TokenizerArgs& args)
+    : bos_token_(args.bos_token().empty() ? kBosToken : args.bos_token()) {}
+
+std::optional<std::string> DeepseekV41CppTemplate::apply(
+    const ChatMessages& messages) const {
+  const std::vector<xllm::JsonTool> empty_tools;
+  const nlohmann::ordered_json kwargs = nlohmann::json::object();
+  return apply(messages, empty_tools, kwargs);
+}
+
+std::optional<std::string> DeepseekV41CppTemplate::apply(
+    const ChatMessages& messages,
+    const std::vector<xllm::JsonTool>& json_tools,
+    const nlohmann::ordered_json& chat_template_kwargs) const {
+  // Failure context for the catch below: the pipeline stage that failed and,
+  // once rendering starts, the index and role of the message being rendered.
+  // render_idx = -1 marks the pre-render stages, which have no current
+  // message.
+  const char* stage = "normalize_messages";
+  int32_t render_idx = -1;
+  std::string render_role;
+  try {
+    const bool has_images = has_image_content(messages);
+    nlohmann::ordered_json normalized =
+        normalize_messages(messages, json_tools);
+    std::string thinking_mode = resolve_thinking_mode(chat_template_kwargs);
+    std::string reasoning_effort =
+        resolve_reasoning_effort(get_reasoning_effort(chat_template_kwargs));
+
+    // Preprocess: merge tool + sort
+    stage = "merge_tool_messages";
+    normalized = deepseek_template::merge_tool_messages(std::move(normalized));
+    stage = "sort_tool_results_by_call_order";
+    normalized = deepseek_template::sort_tool_results_by_call_order(
+        std::move(normalized),
+        deepseek_template::ToolResultOrder::STABLE_UNKNOWN_LAST);
+
+    // drop_thinking = last msg is user
+    bool drop_thinking = false;
+    if (!normalized.empty()) {
+      std::string last_role = normalized.back().value("role", "");
+      drop_thinking = (last_role == kRoleUser);
+    }
+
+    // V4.1: disable drop_thinking when tools exist
+    if (drop_thinking) {
+      for (const auto& m : normalized) {
+        if (m.contains("tools")) {
+          drop_thinking = false;
+          break;
+        }
+      }
+    }
+
+    if (thinking_mode == kThinkingModeThinking && drop_thinking) {
+      stage = "drop_thinking_messages";
+      normalized = drop_thinking_messages(normalized);
+    }
+
+    std::string prompt;
+    prompt += bos_token_;
+
+    stage = "render_message";
+    for (render_idx = 0; render_idx < static_cast<int32_t>(normalized.size());
+         ++render_idx) {
+      render_role = normalized[render_idx].value("role", "");
+      prompt += render_message(normalized,
+                               render_idx,
+                               thinking_mode,
+                               drop_thinking,
+                               reasoning_effort);
+    }
+    if (!has_images) {
+      prompt = restore_image_literals(prompt);
+    }
+    return prompt;
+  } catch (const nlohmann::json::exception& e) {
+    std::ostringstream failure_ctx;
+    failure_ctx << "stage: " << stage;
+    if (render_idx >= 0) {
+      failure_ctx << ", message index: " << render_idx
+                  << ", role: " << render_role;
+    }
+    LOG(ERROR) << "Failed to apply DeepSeek V4.1 native template ("
+               << failure_ctx.str() << "): " << e.what();
+    return std::nullopt;
+  }
+}
+
+}  // namespace xllm

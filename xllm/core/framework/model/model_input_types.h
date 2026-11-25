@@ -362,6 +362,9 @@ class LlmEmbeddingInput final {
   // extra token ids for each sequence, and -1 for last chunk
   std::vector<int32_t> extra_token_ids;
 
+  // Previous request tokens, newest first, at the computed KV boundary.
+  torch::Tensor engram_token_history;
+
   // Precomputed shifted token ids for MTP prefill, aligned with tokens.
   torch::Tensor mtp_shifted_token_ids;
 
@@ -383,6 +386,7 @@ class LlmEmbeddingInput final {
     out.full_block_lease_epochs = full_block_lease_epochs;
     out.request_ids = request_ids;
     out.extra_token_ids = extra_token_ids;
+    out.engram_token_history = safe_to(engram_token_history, device, true);
     out.mtp_shifted_token_ids = safe_to(mtp_shifted_token_ids, device, true);
     out.mtp_bootstrap_row_idxes = mtp_bootstrap_row_idxes;
     out.mtp_bootstrap_embeddings =
@@ -607,6 +611,9 @@ class VlmEmbeddingInput final {
   // extra token ids for each sequence, and -1 for last chunk
   std::vector<int32_t> extra_token_ids;
 
+  // Previous request tokens, newest first, at the computed KV boundary.
+  torch::Tensor engram_token_history;
+
   // Precomputed shifted token ids for MTP prefill, aligned with tokens.
   torch::Tensor mtp_shifted_token_ids;
 
@@ -628,6 +635,7 @@ class VlmEmbeddingInput final {
     out.full_block_lease_epochs = full_block_lease_epochs;
     out.request_ids = request_ids;
     out.extra_token_ids = extra_token_ids;
+    out.engram_token_history = safe_to(engram_token_history, device, true);
     out.mtp_shifted_token_ids = safe_to(mtp_shifted_token_ids, device, true);
     out.mtp_bootstrap_row_idxes = mtp_bootstrap_row_idxes;
     out.mtp_bootstrap_embeddings =

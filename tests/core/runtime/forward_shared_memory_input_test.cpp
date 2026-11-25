@@ -502,5 +502,18 @@ TYPED_TEST(ForwardSharedMemoryInputTest, RejectsInvalidAttachmentEnvelope) {
   EXPECT_FALSE(decoded.from_packed_attachment(metadata, wrong_version));
 }
 
+TYPED_TEST(ForwardSharedMemoryInputTest, EngramHistorySurvivesPackedTransport) {
+  TypeParam source = make_input<TypeParam>({});
+  source.input_params.embedding.engram_token_history =
+      torch::tensor({{19, 7, -1}}, torch::kInt32);
+  proto::PackedForwardInput packed;
+  ASSERT_TRUE(source.to_packed_proto(&packed));
+  TypeParam lazy;
+  ASSERT_TRUE(lazy.from_packed_proto(packed));
+  const auto decoded = lazy.to(torch::Device(torch::kCPU), torch::kFloat32);
+  EXPECT_TRUE(torch::equal(decoded.input_params.embedding.engram_token_history,
+                           source.input_params.embedding.engram_token_history));
+}
+
 }  // namespace
 }  // namespace xllm
