@@ -30,6 +30,7 @@ limitations under the License.
 
 #include "core/common/types.h"
 #include "core/framework/eplb/eplb_info.h"
+#include "core/framework/model/execution_batch_metadata.h"
 #include "core/framework/model/seq_lens.h"
 #include "core/kv_cache/block/block.h"
 #include "core/platform/layer_synchronizer.h"
@@ -286,15 +287,6 @@ class BlockTransferInfo final {
     return std::to_string(src_block_id) + "->" + std::to_string(dst_block_id) +
            ", " + std::to_string(static_cast<uint32_t>(transfer_type)) + rt;
   }
-};
-
-struct ExecutionBatchMetadata {
-  int32_t num_reqs = 0;
-  int64_t num_tokens = 0;
-  std::vector<int32_t> num_scheduled_tokens;
-  std::vector<int32_t> num_computed_tokens;
-  std::vector<int32_t> query_start_loc;
-  std::vector<uint8_t> is_prefilling;
 };
 
 inline void fill_request_layout(

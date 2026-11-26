@@ -11,6 +11,9 @@ cc_library(
     models
   HDRS
     model_registry.h
+    model_args_loader.h
+    llm/deepseek_v4_args.h
+    llm/deepseek_v41_args.h
     speech_model.h
     models.h
     dit/utils/lanczos_resample.h
@@ -18,6 +21,7 @@ cc_library(
     py_model_helper.h
   SRCS
     model_registry.cpp
+    $<$<BOOL:${USE_MLU}>:llm/deepseek_v41_token_map.cpp>
     dit/utils/lanczos_resample.cpp
     $<$<BOOL:${USE_NPU}>:dit/utils/dit_block_weight_manager.cpp>
     llm/py_causal_lm.cpp

@@ -18,6 +18,7 @@ cc_library(
     aux_hidden_capture.h
     model_args.h
     model_params_view.h
+    execution_batch_metadata.h
     mtp_topk_state.h
   SRCS
   DEPS

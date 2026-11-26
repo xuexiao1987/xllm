@@ -6,11 +6,13 @@ use std::fs;
 use std::ffi::{c_char, CStr};
 use std::io;
 use tokenizers::tokenizer::Tokenizer;
+use tokenizers::{NormalizedString, Normalizer};
 
 pub struct TokenizerWrapper {
     tokenizer: Tokenizer,
     decode_str: String,
     id_to_token_result: String,
+    normalized_str: String,
 }
 
 pub type Vocab = HashMap<String, u32>;
@@ -52,6 +54,7 @@ impl TokenizerWrapper {
             tokenizer,
             decode_str: String::new(),
             id_to_token_result: String::new(),
+            normalized_str: String::new(),
         }
     }
 
@@ -78,6 +81,36 @@ extern "C" fn tokenizers_new_from_str(input_cstr: *const u8, len: usize) -> *mut
     unsafe {
         let json = &String::from_utf8_lossy(std::slice::from_raw_parts(input_cstr, len));
         return Box::into_raw(Box::new(TokenizerWrapper::from_str(json)));
+    }
+}
+
+#[no_mangle]
+extern "C" fn tokenizers_normalize(
+    handle: *mut TokenizerWrapper,
+    data: *const u8,
+    len: usize,
+    out_data: *mut *const u8,
+    out_len: *mut usize,
+) -> i32 {
+    unsafe {
+        *out_data = std::ptr::null();
+        *out_len = 0;
+        let wrapper = &mut *handle;
+        wrapper.normalized_str.clear();
+        let text = match std::str::from_utf8(std::slice::from_raw_parts(data, len)) {
+            Ok(text) => text,
+            Err(_) => return 1,
+        };
+        let mut normalized = NormalizedString::from(text);
+        if let Some(normalizer) = wrapper.tokenizer.get_normalizer() {
+            if normalizer.normalize(&mut normalized).is_err() {
+                return 2;
+            }
+        }
+        wrapper.normalized_str = normalized.get().to_owned();
+        *out_data = wrapper.normalized_str.as_ptr();
+        *out_len = wrapper.normalized_str.len();
+        0
     }
 }
 

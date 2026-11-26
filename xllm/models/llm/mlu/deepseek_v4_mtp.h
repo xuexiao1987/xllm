@@ -129,7 +129,7 @@ class DeepseekV4MtpModelImpl final : public torch::nn::Module,
            "size. n_heads="
         << n_heads << ", local_tp_size=" << dp_local_tp_size;
     hc_mult_ = model_args_.hc_mult();
-    window_size_ = model_args_.window_size_;
+    window_size_ = model_args_.window_size();
 
     init_rope(model_args_, options);
     init_hadamard(model_args_, options);
@@ -349,7 +349,7 @@ TORCH_MODULE(DeepseekV4MtpForCausalLM);
 
 inline void load_deepseek_v4_mtp_model_args(const JsonReader& json,
                                             ModelArgs* args) {
-  load_deepseek_v4_model_args(json, args);
+  ::xllm::mlu::model::load_deepseek_v4_model_args(json, args);
   LOAD_ARG_OR(model_type, "model_type", "deepseek_v4_mtp");
   LOAD_ARG_OR(num_nextn_predict_layers, "num_nextn_predict_layers", 1);
   SET_ARG(n_hash_layers, 0);

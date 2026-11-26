@@ -122,16 +122,26 @@ class Csa2CachePlan final {
   int64_t main_block_bytes(int64_t block_size,
                            int64_t head_dim,
                            int64_t index_dim,
-                           int64_t dtype_bytes) const {
-    return block_size * (head_dim * dtype_bytes + index_dim + 2);
+                           int64_t dtype_bytes,
+                           int64_t index_dtype_bytes = 1,
+                           int64_t scale_bytes = 2) const {
+    return block_size * (head_dim * dtype_bytes +
+                         index_dim * index_dtype_bytes + scale_bytes);
   }
   // Two logical blocks cover one C2 block and two C1 blocks.
   int64_t token_unit_bytes(int64_t block_size,
                            int64_t head_dim,
                            int64_t index_dim,
-                           int64_t dtype_bytes) const {
+                           int64_t dtype_bytes,
+                           int64_t index_dtype_bytes = 1,
+                           int64_t scale_bytes = 2) const {
     return (source_count(2) + 2 * source_count(1)) *
-           main_block_bytes(block_size, head_dim, index_dim, dtype_bytes);
+           main_block_bytes(block_size,
+                            head_dim,
+                            index_dim,
+                            dtype_bytes,
+                            index_dtype_bytes,
+                            scale_bytes);
   }
 
  private:

@@ -123,13 +123,22 @@ bool load_ct_int_config(const nlohmann::json& config, QuantArgs& args) {
             .value_or(0);
     scheme.preserve_smooth = weights.value("preserve_smooth", false);
     const bool w4 = scheme.bits == kCompressedBits4;
-    const std::string format =
-        group.value("format", config.value("format", "int-quantized"));
+    const auto format_it = group.find("format");
+    const std::string format = format_it != group.end() && !format_it->is_null()
+                                   ? format_it->get<std::string>()
+                                   : config.value("format", "int-quantized");
+    // MLU SmoothQuant exporters may retain the fakequant label for W8A8.
+    // W4A8 still requires an explicit LE-packed format; its layout differs.
+    const bool mlu_smooth_w8a8 = Platform::is_mlu() && !w4 &&
+                                 scheme.preserve_smooth &&
+                                 format == "fakequant";
+    const bool supported_format =
+        format == (w4 ? "int4-le-pack-quantized" : "int-quantized") ||
+        mlu_smooth_w8a8;
     if ((scheme.bits != kCompressedBits4 && scheme.bits != kCompressedBits8) ||
         compressed_int_scheme_bits(activations, /*expected_dynamic=*/true) !=
             kCompressedBits8 ||
-        format != (w4 ? "int4-le-pack-quantized" : "int-quantized") ||
-        !weights.value("symmetric", true) ||
+        !supported_format || !weights.value("symmetric", true) ||
         !activations.value("symmetric", true) ||
         weights.value("strategy", "channel") != (w4 ? "group" : "channel") ||
         activations.value("strategy", "token") != "token" ||

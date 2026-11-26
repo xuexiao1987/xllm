@@ -454,8 +454,15 @@ void init_csa2_counts(const ModelArgs& args,
       plan.swa_block_bytes(block_size, args.head_dim(), dtype_bytes);
   CHECK_GT(capacity->cache_size_in_bytes(), fixed_bytes)
       << "Insufficient CSA2 SWA/state memory";
-  const int64_t unit_bytes = plan.token_unit_bytes(
-      block_size, args.head_dim(), args.index_head_dim(), dtype_bytes);
+  const DeepSeekV4CachePolicy cache_policy =
+      get_dsv4_cache_policy(options.dtype);
+  const int64_t unit_bytes =
+      plan.token_unit_bytes(block_size,
+                            args.head_dim(),
+                            args.index_head_dim(),
+                            dtype_bytes,
+                            cache_policy.index_dtype_size,
+                            cache_policy.scale_dtype_size);
   CHECK_GT(unit_bytes, 0) << "CSA2 requires at least one Full source layer";
   const int64_t units =
       (capacity->cache_size_in_bytes() - fixed_bytes) / unit_bytes;

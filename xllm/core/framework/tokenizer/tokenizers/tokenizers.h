@@ -18,6 +18,15 @@ typedef struct {
 } TokenizerEncodeResult;
 
 TokenizerHandle tokenizers_new_from_path(const char* path);
+TokenizerHandle tokenizers_new_from_str(const char* data, size_t len);
+
+// The returned UTF-8 bytes belong to the tokenizer until the next normalize
+// call. Status: 0=success, 1=invalid UTF-8, 2=normalizer error.
+int32_t tokenizers_normalize(TokenizerHandle handle,
+                             const char* data,
+                             size_t len,
+                             const char** normalized_data,
+                             size_t* normalized_len);
 
 void tokenizers_encode(TokenizerHandle handle,
                        const char* data,

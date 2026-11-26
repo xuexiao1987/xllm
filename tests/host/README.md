@@ -19,12 +19,21 @@ ctest --test-dir build-host-model --output-on-failure --no-tests=error \
   --timeout 120 --output-junit results.xml
 ```
 
-The entry point builds the CSA2 cache plan tests and the C++/Python layout
+The entry point builds the CSA2 cache plan, native attention/compressor,
+Engram, model argument, mHC launch-plan tests and the C++/Python layout
 parity probe, and runs the Python model tests in this directory. It uses the
-existing `cc_test` compiled-test discovery path. GoogleTest and glog revisions
+existing `cc_test` compiled-test discovery path. GoogleTest, glog and Abseil revisions
 are fixed for this standalone test build; production dependency pins do not
 change. Existing sources can be supplied through
-`FETCHCONTENT_SOURCE_DIR_GOOGLETEST` and `FETCHCONTENT_SOURCE_DIR_GLOG`.
+`FETCHCONTENT_SOURCE_DIR_GOOGLETEST`, `FETCHCONTENT_SOURCE_DIR_GLOG`
+and `FETCHCONTENT_SOURCE_DIR_ABSEIL`. A CMake package for nlohmann_json is
+required; Torch is located through the selected Python interpreter.
+
+The Rust-backed token-map tests are enabled with
+`-DXLLM_HOST_TOKENIZERS_LIBRARY=/absolute/path/to/librust_tokenizers.a`.
+Build that library from this checkout using `cargo build --release` in
+`xllm/core/framework/tokenizer/tokenizers`; an accelerator SDK is not required
+for this Rust library. Without the option, token-map tests are not registered.
 
 Python tests cover checkpoint aliases and shapes, dense and expert TP shards,
 Engram hashing and chunked INT8 table loading, mHC mixing, MoE routing, CSA2

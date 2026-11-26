@@ -62,6 +62,7 @@ struct MHCPreOutput final {
   torch::Tensor output;
   torch::Tensor post;
   torch::Tensor comb;
+  torch::Tensor pre;
 };
 
 class MHCPreImpl final : public torch::nn::Module {
@@ -79,7 +80,8 @@ class MHCPreImpl final : public torch::nn::Module {
 
   MHCPreOutput forward(
       const torch::Tensor& x,
-      const std::optional<torch::Tensor>& rsqrt = std::nullopt);
+      const std::optional<torch::Tensor>& rsqrt = std::nullopt,
+      const std::optional<torch::Tensor>& pre_mix = std::nullopt);
 
   std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
   fused_post_pre_norm(const torch::Tensor& x,
@@ -89,6 +91,24 @@ class MHCPreImpl final : public torch::nn::Module {
                       const torch::Tensor& gamma);
 
   bool supports_fused_mhc() const { return hc_mult_ == 4 && dim_ == 4096; }
+
+  std::tuple<torch::Tensor,
+             torch::Tensor,
+             torch::Tensor,
+             torch::Tensor,
+             torch::Tensor>
+  fused_delayed_pre(const torch::Tensor& x,
+                    const torch::Tensor& residual,
+                    const torch::Tensor& post,
+                    const torch::Tensor& comb,
+                    const torch::Tensor& pre,
+                    const torch::Tensor& gamma);
+
+  // The delayed-pre kernel preserves the preceding layer's mixing weights.
+  bool supports_fused_delayed_pre() const {
+    return hc_mult_ == 4 && dim_ == 5120 &&
+           hc_fn_.scalar_type() == torch::kBFloat16;
+  }
 
   void load_state_dict(const StateDict& state_dict);
   void verify_loaded_weights(const std::string& prefix) const;

@@ -71,3 +71,7 @@ set_tests_properties(
   PROPERTIES
     RUN_SERIAL TRUE
 )
+
+cc_test(NAME fused_mhc_delayed_pre_test
+  SRCS fused_mhc_delayed_pre_test.cpp
+  DEPS :mlu_kernels torch glog::glog GTest::gtest_main)

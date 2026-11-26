@@ -585,7 +585,7 @@ REGISTER_CAUSAL_MODEL(deepseek_v4, DeepseekV4ForCausalLM);
 
 REGISTER_MODEL_ARGS(deepseek_v4, [&] {
   const DeepseekV4ArgsPolicy args_policy = build_deepseek_v4_args_policy();
-  load_deepseek_v4_model_args(json, args);
+  ::xllm::mlu::model::load_deepseek_v4_model_args(json, args);
   process_deepseek_v4_args(args, args_policy);
   validate_deepseek_v4_args(*args, args_policy);
 });

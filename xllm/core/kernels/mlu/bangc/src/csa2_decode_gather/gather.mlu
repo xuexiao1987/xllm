@@ -1,0 +1,118 @@
+/* Copyright 2026 The xLLM Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    https://github.com/xLLM-AI/xllm/blob/main/LICENSE
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+==============================================================================*/
+
+#include <bang.h>
+
+#include "core/kernels/mlu/bangc/src/csa2_decode_gather/launcher.h"
+
+namespace xllm::kernel::mlu::bangc {
+namespace {
+// CSA2 cache pages are fixed at 128 rows by the model boundary.
+constexpr int32_t kBlockSize = 128;
+constexpr int32_t kIndexTileSize = 128;
+__nram__ int16_t row[512];
+__nram__ int64_t index_tile[kIndexTileSize];
+__mlu_global__ void gather(int16_t* swa,
+                           const int16_t* compressed,
+                           const int16_t* current,
+                           const int32_t* swa_table,
+                           const int32_t* comp_table,
+                           const int64_t* topk,
+                           int32_t count,
+                           int64_t position,
+                           int32_t window,
+                           int32_t swa_columns,
+                           int16_t* output,
+                           int32_t* length) {
+  const int32_t win = position + 1 < window ? position + 1 : window;
+  for (int32_t col = taskId; col < win; col += taskDim) {
+    const int64_t logical = position - win + 1 + col;
+    const int64_t physical =
+        static_cast<int64_t>(swa_table[(logical / kBlockSize) % swa_columns]) *
+            kBlockSize +
+        logical % kBlockSize;
+    const int16_t* source =
+        logical == position ? current : swa + physical * 512;
+    __memcpy(row, source, 512 * sizeof(int16_t), GDRAM2NRAM);
+    __memcpy(output + col * 512, row, 512 * sizeof(int16_t), NRAM2GDRAM);
+  }
+
+  // Block tasks cannot share a prefix scan. Scan the small index stream once
+  // per task and distribute the compacted rows by their stable output rank.
+  // Bounded tiles support arbitrary top-k widths without scratch or barriers.
+  int32_t valid_count = 0;
+  for (int64_t begin = 0; begin < count; begin += kIndexTileSize) {
+    const int32_t size = count - begin < kIndexTileSize
+                             ? static_cast<int32_t>(count - begin)
+                             : kIndexTileSize;
+    __memcpy(index_tile, topk + begin, size * sizeof(int64_t), GDRAM2NRAM);
+    for (int32_t index = 0; index < size; ++index) {
+      const int64_t logical = index_tile[index];
+      if (logical < 0) {
+        continue;
+      }
+      const int32_t col = win + valid_count++;
+      if (col % taskDim != taskId) {
+        continue;
+      }
+      const int64_t physical =
+          static_cast<int64_t>(comp_table[logical / kBlockSize]) * kBlockSize +
+          logical % kBlockSize;
+      __memcpy(
+          row, compressed + physical * 512, 512 * sizeof(int16_t), GDRAM2NRAM);
+      __memcpy(output + col * 512, row, 512 * sizeof(int16_t), NRAM2GDRAM);
+    }
+  }
+  if (taskId == 0) {
+    *length = win + valid_count;
+    const int64_t target =
+        static_cast<int64_t>(swa_table[(position / kBlockSize) % swa_columns]) *
+            kBlockSize +
+        position % kBlockSize;
+    __memcpy(row, current, 512 * sizeof(int16_t), GDRAM2NRAM);
+    __memcpy(swa + target * 512, row, 512 * sizeof(int16_t), NRAM2GDRAM);
+  }
+}
+}  // namespace
+void csa2_decode_gather_launch(cnrtQueue_t queue,
+                               void* swa,
+                               const void* compressed,
+                               const void* current,
+                               const int32_t* swa_table,
+                               const int32_t* comp_table,
+                               const int64_t* topk,
+                               int32_t count,
+                               int64_t position,
+                               int32_t window,
+                               int32_t swa_columns,
+                               void* output,
+                               int32_t* length) {
+  cnrtDim3_t grid = {32, 1, 1};
+  gather<<<grid, cnrtFuncTypeBlock, queue>>>(
+      static_cast<int16_t*>(swa),
+      static_cast<const int16_t*>(compressed),
+      static_cast<const int16_t*>(current),
+      swa_table,
+      comp_table,
+      topk,
+      count,
+      position,
+      window,
+      swa_columns,
+      static_cast<int16_t*>(output),
+      length);
+}
+
+}  // namespace xllm::kernel::mlu::bangc

@@ -263,6 +263,9 @@ class ModelArchitectureArgs final {
  public:
   REFLECT_PROPERTIES(ModelArchitectureArgs);
 
+  // Model-declared input requirement, independent of Python/Native dispatch.
+  PROPERTY(bool, requires_execution_batch) = false;
+
   PROPERTY(std::string, model_type);
   PROPERTY(std::string, dtype);
   PROPERTY(int64_t, hidden_size) = 0;
@@ -366,6 +369,15 @@ class DeepseekV41Args final {
   PROPERTY(std::vector<int32_t>, index_source_layer_ids);
   PROPERTY(std::vector<int32_t>, engram_layer_ids);
   PROPERTY(int32_t, engram_max_ngram_size) = 0;
+  PROPERTY(std::vector<int64_t>, engram_num_embeddings);
+  PROPERTY(int64_t, engram_vocab_size) = 0;
+  PROPERTY(int64_t, engram_compressed_vocab_size) = 0;
+  PROPERTY(int32_t, engram_n_heads) = 0;
+  PROPERTY(int32_t, engram_head_dim) = 0;
+  PROPERTY(int32_t, engram_pad_token_id) = -1;
+  PROPERTY(int32_t, candidate_source_layer_id) = -1;
+  PROPERTY(int32_t, candidate_topk_blocks) = 0;
+  PROPERTY(int32_t, candidate_block_size) = 0;
 };
 
 // Hyperconnection topology and sinkhorn normalization configuration.
@@ -690,6 +702,8 @@ struct ModelArgs {
 
   PROPERTY(ModelArchitectureArgs, model_architecture_args);
 
+  FORWARD_PROPERTY(bool, requires_execution_batch, model_architecture_args);
+
   FORWARD_PROPERTY(std::string, model_type, model_architecture_args);
   FORWARD_PROPERTY(std::string, dtype, model_architecture_args);
   FORWARD_PROPERTY(int64_t, hidden_size, model_architecture_args);
@@ -877,6 +891,17 @@ struct ModelArgs {
                    deepseek_v41_args);
   FORWARD_PROPERTY(std::vector<int32_t>, engram_layer_ids, deepseek_v41_args);
   FORWARD_PROPERTY(int32_t, engram_max_ngram_size, deepseek_v41_args);
+  FORWARD_PROPERTY(std::vector<int64_t>,
+                   engram_num_embeddings,
+                   deepseek_v41_args);
+  FORWARD_PROPERTY(int64_t, engram_vocab_size, deepseek_v41_args);
+  FORWARD_PROPERTY(int64_t, engram_compressed_vocab_size, deepseek_v41_args);
+  FORWARD_PROPERTY(int32_t, engram_n_heads, deepseek_v41_args);
+  FORWARD_PROPERTY(int32_t, engram_head_dim, deepseek_v41_args);
+  FORWARD_PROPERTY(int32_t, engram_pad_token_id, deepseek_v41_args);
+  FORWARD_PROPERTY(int32_t, candidate_source_layer_id, deepseek_v41_args);
+  FORWARD_PROPERTY(int32_t, candidate_topk_blocks, deepseek_v41_args);
+  FORWARD_PROPERTY(int32_t, candidate_block_size, deepseek_v41_args);
   PROPERTY(DeepseekV4Args, deepseek_v4_args);
 
   FORWARD_PROPERTY(int32_t, rope_head_dim, deepseek_v4_args);

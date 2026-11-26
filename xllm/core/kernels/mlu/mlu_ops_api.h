@@ -28,6 +28,36 @@ limitations under the License.
 
 namespace xllm::kernel::mlu {
 
+void csa2_decode_compress(const torch::Tensor& raw,
+                          const torch::Tensor& scores,
+                          const torch::Tensor& norm_weight,
+                          const torch::Tensor& rope,
+                          torch::Tensor state,
+                          torch::Tensor main,
+                          const torch::Tensor& state_table,
+                          const torch::Tensor& main_table,
+                          int64_t position,
+                          int64_t ratio,
+                          int64_t rope_dim,
+                          double norm_eps,
+                          bool save_full_tail,
+                          torch::Tensor latent,
+                          torch::Tensor positions,
+                          torch::Tensor slots);
+
+// Pack SWA and valid compressed rows in TopK order, then update the SWA ring.
+void csa2_decode_gather(const torch::Tensor& swa,
+                        const torch::Tensor& compressed,
+                        const torch::Tensor& current,
+                        const torch::Tensor& swa_table,
+                        const torch::Tensor& compressed_table,
+                        const torch::Tensor& topk,
+                        int64_t position,
+                        int64_t window_size,
+                        int64_t topk_capacity,
+                        torch::Tensor output,
+                        torch::Tensor length);
+
 // Scale [B,H,V] in place using gathered [N,B,H] LSEs and int32 slots.
 void dcp_correct_attn_out(torch::Tensor& output,
                           const torch::Tensor& lse,
@@ -382,6 +412,24 @@ fused_mhc(const torch::Tensor& x,
           const torch::Tensor& hc_base,
           int64_t sinkhorn_iter,
           double eps);
+
+std::tuple<torch::Tensor,
+           torch::Tensor,
+           torch::Tensor,
+           torch::Tensor,
+           torch::Tensor>
+fused_mhc_delayed_pre(const torch::Tensor& x,
+                      const torch::Tensor& residual_in,
+                      const torch::Tensor& hc_fn,
+                      const torch::Tensor& gamma,
+                      const torch::Tensor& post_in,
+                      const torch::Tensor& comb_in,
+                      const torch::Tensor& pre_in,
+                      const torch::Tensor& hc_scale,
+                      const torch::Tensor& hc_base,
+                      int64_t sinkhorn_iter,
+                      double hc_eps,
+                      double norm_eps);
 
 void fused_mla_q(const torch::Tensor& input,
                  torch::Tensor& output,

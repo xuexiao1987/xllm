@@ -730,6 +730,24 @@ std::tuple<int64_t, int64_t> WorkerImpl::estimate_kv_cache_capacity() {
 #endif
   const auto available_memory = device_.free_memory();
   const auto total_memory = device_.total_memory();
+#if defined(USE_MLU)
+  if (torch_mlu::MLUCachingAllocator::name() == "native") {
+    // Device-wide free memory alone cannot distinguish weight residency,
+    // allocator cache, and memory held outside this process's torch allocator.
+    const auto stats =
+        torch_mlu::MLUCachingAllocator::getDeviceStats(device_id);
+    const size_t stat_index =
+        static_cast<size_t>(c10::CachingAllocator::StatType::AGGREGATE);
+    LOG(INFO) << "MLU startup memory after empty_cache: rank="
+              << parallel_args_.rank() << ", device=" << device_id
+              << ", free_bytes=" << available_memory
+              << ", total_bytes=" << total_memory << ", allocated_bytes="
+              << stats.allocated_bytes[stat_index].current
+              << ", reserved_bytes=" << stats.reserved_bytes[stat_index].current
+              << ", inactive_split_bytes="
+              << stats.inactive_split_bytes[stat_index].current;
+  }
+#endif
   return {available_memory + torch_cache, total_memory};
 }
 

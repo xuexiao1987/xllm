@@ -361,6 +361,29 @@ TEST_F(HyperConnectionTest, HCPreMatchesOfficialReference) {
   test::verify_tensor_close(actual.comb.cpu(), expected.comb.cpu(), 1e-3, 1e-3);
 }
 
+TEST_F(HyperConnectionTest, HCPreUsesPreviousMixAndReturnsNextMix) {
+  const auto x = seeded("v41.delayed_pre",
+                        {2, config_.hc_mult, config_.dim},
+                        torch::kBFloat16,
+                        options_.device());
+  MHCPre pre(config_.hc_mult,
+             config_.dim,
+             config_.sinkhorn_iters,
+             config_.hc_eps,
+             config_.norm_eps,
+             options_);
+  pre->load_state_dict(StateDict(pre_weights()));
+  const auto normal = pre->forward(x);
+  auto previous =
+      torch::zeros({2, config_.hc_mult}, options_.dtype(torch::kFloat32));
+  previous.select(1, 2).fill_(1);
+  const auto delayed = pre->forward(x, std::nullopt, previous);
+  EXPECT_TRUE(torch::equal(delayed.output.cpu(), x.select(1, 2).cpu()));
+  EXPECT_TRUE(torch::equal(delayed.pre.cpu(), normal.pre.cpu()));
+  EXPECT_TRUE(torch::equal(delayed.post.cpu(), normal.post.cpu()));
+  EXPECT_TRUE(torch::equal(delayed.comb.cpu(), normal.comb.cpu()));
+}
+
 TEST_F(HyperConnectionTest, HCPostMatchesOfficialReference) {
   const int64_t tokens = 2;
   torch::Tensor x = seeded("deepseek_v4_hc.post.x",

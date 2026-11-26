@@ -31,6 +31,7 @@ limitations under the License.
 #include "core/framework/tokenizer/tokenizer_args.h"
 #include "core/util/json_reader.h"
 #include "core/util/type_traits.h"  // IWYU pragma: keep
+#include "models/model_args_loader.h"
 #include "processors/multimodal_processor.h"
 
 namespace xllm {
@@ -477,33 +478,6 @@ std::unique_ptr<DiTModel> create_dit_model(const DiTModelContext& context);
 
 #define REGISTER_TOKENIZER_ARGS(ModelType, ...) \
   REGISTER_TOKENIZER_ARGS_WITH_VARNAME(ModelType, ModelType, __VA_ARGS__)
-
-#define LOAD_ARG(arg_name, json_name)                          \
-  [&] {                                                        \
-    auto value = args->arg_name();                             \
-    using value_type = remove_optional_t<decltype(value)>;     \
-    if (auto data_value = json.value<value_type>(json_name)) { \
-      args->arg_name() = data_value.value();                   \
-    }                                                          \
-  }()
-
-#define LOAD_ARG_OR(arg_name, json_name, default_value)                     \
-  [&] {                                                                     \
-    auto value = args->arg_name();                                          \
-    using value_type = remove_optional_t<decltype(value)>;                  \
-    args->arg_name() = json.value_or<value_type>(json_name, default_value); \
-  }()
-
-#define LOAD_ARG_OR_FUNC(arg_name, json_name, ...)             \
-  [&] {                                                        \
-    auto value = args->arg_name();                             \
-    using value_type = remove_optional_t<decltype(value)>;     \
-    if (auto data_value = json.value<value_type>(json_name)) { \
-      args->arg_name() = data_value.value();                   \
-    } else {                                                   \
-      args->arg_name() = __VA_ARGS__();                        \
-    }                                                          \
-  }()
 
 #define SET_ARG(arg_name, value) [&] { args->arg_name() = value; }()
 

@@ -14,7 +14,11 @@ limitations under the License.
 ==============================================================================*/
 
 #include <gtest/gtest.h>
+#include <unistd.h>
 
+#include <array>
+#include <filesystem>
+#include <fstream>
 #include <unordered_map>
 #include <vector>
 
@@ -23,6 +27,39 @@ limitations under the License.
 
 namespace xllm {
 namespace {
+
+TEST(StateDictUtilsTest, SafetensorE8M0PreservesScaleBytes) {
+  std::string path =
+      (std::filesystem::temp_directory_path() / "xllm-e8m0-XXXXXX").string();
+  const int32_t fd = mkstemp(path.data());
+  ASSERT_GE(fd, 0);
+  close(fd);
+  std::string header =
+      R"({"scale":{"dtype":"F8_E8M0","shape":[2,2],"data_offsets":[0,4]}})";
+  header.append((8 - header.size() % 8) % 8, ' ');
+  const std::array<uint8_t, 4> bytes = {0, 127, 128, 255};
+  {
+    std::ofstream file(path, std::ios::binary);
+    const uint64_t length = header.size();
+    for (int32_t i = 0; i < 8; ++i) {
+      file.put(static_cast<char>((length >> (i * 8)) & 0xff));
+    }
+    file.write(header.data(), header.size());
+    for (const uint8_t byte : bytes) {
+      file.put(static_cast<char>(byte));
+    }
+    ASSERT_TRUE(file.good());
+  }
+  auto state = StateDictFromSafeTensor::load(path);
+  std::filesystem::remove(path);
+  const torch::Tensor scale = state->get_tensor("scale");
+  ASSERT_TRUE(scale.defined());
+  EXPECT_EQ(scale.scalar_type(), torch::kUInt8);
+  EXPECT_EQ(scale.sizes(), (torch::IntArrayRef{2, 2}));
+  const torch::Tensor expected =
+      torch::tensor({{0, 127}, {128, 255}}, torch::kUInt8);
+  EXPECT_TRUE(torch::equal(scale, expected));
+}
 
 TEST(StateDictUtilsTest, LoadsMoeWeightsIntoPhysicalExpertPrefix) {
   std::unordered_map<std::string, torch::Tensor> tensors;

@@ -447,18 +447,27 @@ DeepSeekV4KVCacheTensors create_dsv4_cache_tensors(
                                         create_options.dtype());
     tensors.index_cache = allocate_tensor(KVCacheTensorRole::INDEX,
                                           {count, block_size, index_head_dim},
-                                          torch::kInt8);
-    tensors.indexer_cache_scale =
-        allocate_tensor(KVCacheTensorRole::INDEX_SCALE,
-                        {count, block_size, 1},
-                        torch::kFloat16);
+                                          cache_policy.index_dtype);
+    if (cache_policy.has_indexer_cache_scale) {
+      tensors.indexer_cache_scale =
+          allocate_tensor(KVCacheTensorRole::INDEX_SCALE,
+                          {count, block_size, 1},
+                          cache_policy.scale_dtype);
+    }
     if (layer.owns_state) {
+#if defined(USE_MLU)
+      tensors.compress_state =
+          allocate_tensor(KVCacheTensorRole::COMPRESS_STATE,
+                          {swa_count, Csa2CachePlan::kStateRows, 2 * head_dim},
+                          torch::kFloat32);
+#else
       const std::vector<int64_t> shape{
           swa_count, Csa2CachePlan::kStateRows, head_dim};
       tensors.compress_kv_state =
           allocate_tensor(KVCacheTensorRole::KV_STATE, shape, torch::kFloat32);
       tensors.compress_score_state = allocate_tensor(
           KVCacheTensorRole::SCORE_STATE, shape, torch::kFloat32);
+#endif
     }
     return tensors;
   }

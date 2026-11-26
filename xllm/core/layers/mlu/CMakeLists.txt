@@ -23,6 +23,15 @@ cc_library(
     deepseek_v4/deepseek_v4_attention.h
     deepseek_v4/deepseek_v4_decoder_layer.h
     deepseek_v4/deepseek_v4_sparse_moe_block.h
+    deepseek_v41/engram_table.h
+    deepseek_v41/attention_projection.h
+    deepseek_v41/deepseek_v41_attention.h
+    deepseek_v41/deepseek_v41_decoder_layer.h
+    deepseek_v41/native_engram.h
+    deepseek_v41/csa2_attention.h
+    deepseek_v41/csa2_compressor.h
+    deepseek_v41/deepseek_v41_engram.h
+    deepseek_v41/deepseek_v41_hash.h
     hyper_connection.h
     linear_attention_utils.h
     glm5_next/glm5_next_decoder_layer.h
@@ -57,6 +66,14 @@ cc_library(
     deepseek_v4/deepseek_v4_attention.cpp
     deepseek_v4/deepseek_v4_decoder_layer.cpp
     deepseek_v4/deepseek_v4_sparse_moe_block.cpp
+    deepseek_v41/engram_table.cpp
+    deepseek_v41/deepseek_v41_attention.cpp
+    deepseek_v41/deepseek_v41_decoder_layer.cpp
+    deepseek_v41/native_engram.cpp
+    deepseek_v41/csa2_attention.cpp
+    deepseek_v41/csa2_compressor.cpp
+    deepseek_v41/deepseek_v41_engram.cpp
+    deepseek_v41/deepseek_v41_hash.cpp
     hyper_connection.cpp
     glm5_next/glm5_next_decoder_layer.cpp
     glm5_next/glm5_next_kda.cpp

@@ -281,11 +281,13 @@ void validate_config(const std::string& model_type) {
                  << "Disabling enable_schedule_overlap.";
     scheduler_config.enable_schedule_overlap(false);
   }
-  // TODO: support other block sizes in the future
-  if (kv_cache_config.block_size() != 16 && kv_cache_config.block_size() != 1 &&
-      model_config.backend() != "dit") {
-    LOG(FATAL) << "Currently, block_size must be 16 for MLU backend, we will "
-                  "support other block sizes in the future.";
+  if (model_type == "deepseek_v41" || model_type == "deepseek_v41_text") {
+    CHECK_EQ(kv_cache_config.block_size(), 128)
+        << "MLU DeepSeek V4.1 requires block_size=128.";
+  } else if (kv_cache_config.block_size() != 16 &&
+             kv_cache_config.block_size() != 1 &&
+             model_config.backend() != "dit") {
+    LOG(FATAL) << "MLU requires block_size 1 or 16.";
   }
   if (disagg_pd_config.enable_disagg_pd()) {
     if (model_config.backend() != "llm") {

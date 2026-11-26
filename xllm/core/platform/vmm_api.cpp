@@ -31,7 +31,7 @@ bool is_allocation_exhausted(int32_t result) {
   return result == ACL_ERROR_RT_MEMORY_ALLOCATION ||
          result == ACL_ERROR_BAD_ALLOC;
 #elif defined(USE_MLU)
-  return result == CN_ERROR_OUT_OF_MEMORY;
+  return result == CN_MEMORY_ERROR_OUT_OF_MEMORY;
 #elif defined(USE_CUDA) || defined(USE_ILU)
   return result == CUDA_ERROR_OUT_OF_MEMORY;
 #elif defined(USE_MUSA)

@@ -125,8 +125,10 @@ ForwardInputBuilder::ForwardInputBuilder(
       thread_pool_(thread_pool),
       batch_id_(data.batch_id),
       shared_kv_mapping_tracker_(mapping_tracker) {
-  build_execution_batch_ = ModelConfig::is_python_model_impl(
-      ModelConfig::get_instance().model_impl());
+  build_execution_batch_ =
+      ModelConfig::is_python_model_impl(
+          ModelConfig::get_instance().model_impl()) ||
+      (args_ != nullptr && args_->requires_execution_batch());
   CHECK_GT(cp_size_, 0);
   // Reserve space for better performance
   const size_t reserve_size = 1024;

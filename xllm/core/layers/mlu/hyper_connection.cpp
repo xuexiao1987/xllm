@@ -115,7 +115,8 @@ MHCPreImpl::MHCPreImpl(int64_t hc_mult,
 }
 
 MHCPreOutput MHCPreImpl::forward(const torch::Tensor& x,
-                                 const std::optional<torch::Tensor>& rsqrt) {
+                                 const std::optional<torch::Tensor>& rsqrt,
+                                 const std::optional<torch::Tensor>& pre_mix) {
   torch::Tensor x_hc = flat_hc(x, hc_mult_, dim_);
   torch::Tensor x_flat = x_hc.reshape({x_hc.size(0), hc_mult_ * dim_});
 
@@ -141,7 +142,8 @@ MHCPreOutput MHCPreImpl::forward(const torch::Tensor& x,
                                                              sinkhorn_iters_,
                                                              hc_eps_);
 
-  torch::Tensor output = kernel::mlu::fused_mul_reduce_sum(x_hc, pre);
+  torch::Tensor output =
+      kernel::mlu::fused_mul_reduce_sum(x_hc, pre_mix.value_or(pre));
   std::vector<int64_t> out_shape = leading_shape(x, /*tail_dims=*/2);
   out_shape.emplace_back(dim_);
   output = output.reshape(out_shape);
@@ -151,7 +153,7 @@ MHCPreOutput MHCPreImpl::forward(const torch::Tensor& x,
 
   out_shape.emplace_back(hc_mult_);
   comb = comb.reshape(out_shape);
-  return {output, post, comb};
+  return {output, post, comb, pre.reshape(post.sizes())};
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
@@ -174,6 +176,35 @@ MHCPreImpl::fused_post_pre_norm(const torch::Tensor& x,
       hc_base_,
       sinkhorn_iters_,
       hc_eps_);
+}
+
+std::tuple<torch::Tensor,
+           torch::Tensor,
+           torch::Tensor,
+           torch::Tensor,
+           torch::Tensor>
+MHCPreImpl::fused_delayed_pre(const torch::Tensor& x,
+                              const torch::Tensor& residual,
+                              const torch::Tensor& post,
+                              const torch::Tensor& comb,
+                              const torch::Tensor& pre,
+                              const torch::Tensor& gamma) {
+  CHECK_EQ(hc_mult_, 4);
+  CHECK_EQ(dim_, 5120);
+  const int64_t tokens = x.numel() / dim_;
+  return kernel::mlu::fused_mhc_delayed_pre(
+      flat_hidden(x, dim_),
+      flat_hc(residual, hc_mult_, dim_),
+      hc_fn_,
+      gamma,
+      post.reshape({tokens, hc_mult_}).contiguous(),
+      flat_matrix(comb, hc_mult_, hc_mult_),
+      pre.reshape({tokens, hc_mult_}).contiguous(),
+      hc_scale_,
+      hc_base_,
+      sinkhorn_iters_,
+      hc_eps_,
+      norm_eps_);
 }
 
 void MHCPreImpl::load_state_dict(const StateDict& state_dict) {

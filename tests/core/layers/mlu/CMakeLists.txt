@@ -1,5 +1,15 @@
 include(cc_test)
 
+# Device tests are registered without discovery: building this target never
+# initializes an MLU context. Run only after acquiring an idle device.
+cc_test(
+  NAME deepseek_v41_model_test
+  SRCS deepseek_v41_model_test.cpp
+  DEPS :models :mlu_layers :common_layers :kv_cache :parallel_state
+       :model :model_context :state_dict :config
+       glog::glog torch GTest::gtest_main
+)
+
 get_filename_component(_xllm_build_import_root
   "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}" DIRECTORY)
 
